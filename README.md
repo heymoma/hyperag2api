@@ -1,2 +1,238 @@
-# hyperag2api
-hyperagent.com to OpenAI Compatible API
+# 🚀 hyperag2api
+
+**English** · [Русский](README.ru.md)
+
+<p align="center">
+  <a href="https://hyperagent.com">
+    <img src="https://img.shields.io/badge/Powered%20by-Hyperagent-0052FF?style=for-the-badge" alt="Powered by Hyperagent" />
+  </a>
+  <img src="https://img.shields.io/badge/python-3.9%2B-blue?style=for-the-badge" alt="Python 3.9+" />
+  <img src="https://img.shields.io/badge/license-MIT-green?style=for-the-badge" alt="MIT License" />
+</p>
+
+---
+
+**`hyperag2api`** is a high-performance, cross-platform, **OpenAI-compatible** proxy server for **[Hyperagent.com](https://hyperagent.com)**. It exposes a local `/v1/chat/completions` endpoint and forwards requests to Hyperagent's backend using your logged-in browser session — so you can drive advanced models (*Claude Opus 4.8*, *GPT 5.6*, *Gemini 3.5*, *Grok 4.5*, and more) from **OpenCode**, **Continue**, **Cursor**, or any custom OpenAI client.
+
+---
+
+## ✨ Features
+
+- 🧵 **Session-aware threads** — one Hyperagent thread per conversation, reused across turns. Instead of creating a brand-new thread (and re-sending the entire history) on every request, the proxy recognises follow-up turns and sends only the newest message. Optional **SQLite persistence** keeps the mapping across restarts, and **named sessions** let you pin a thread explicitly.
+- 🧠 **Reasoning / thinking display** — model reasoning is streamed as OpenAI `reasoning_content` and/or inline `<think>…</think>` tags (`REASONING_STYLE`).
+- 🛡️ **Stability** — short-TTL cookie caching over a single CDP connection, automatic re-auth on 401/403, split connect/stream timeouts, exponential-backoff retries, resilient SSE parsing, and SSE keepalive heartbeats so long generations don't time out.
+- 🔧 **Tool-call passthrough** — backend tool activity can surface as OpenAI `tool_calls` deltas (`TOOLCALL_MODE`).
+- 🖼️ **Multimodal input** — `image_url` content parts are uploaded via `/api/files/upload` and bound to the thread via `/api/threads/{id}/attachments`.
+- 📊 **Live dashboard** — a read-only monitor at `/dashboard` (plus JSON at `/api/stats`) showing active sessions, recent requests, latency, tokens, and browser/cookie health.
+- ❤️ **Health probe** — `/health` reports browser connectivity and login state.
+
+> Plan mode is **off by default** (`INJECT_PLAN_MODE=0`): the model does the work instead of only proposing a plan. Steering/`AskQuestion` prompts are still detected and rendered.
+
+---
+
+## ⚡ Prerequisites
+
+To capture session cookies correctly, you need **at least one Chromium-based browser** the launcher can drive over CDP. It auto-detects any of:
+
+- 💻 **Microsoft Edge** (Recommended)
+- 🌐 **Google Chrome**
+- 🦁 **Brave Browser**
+- 📦 **Chromium**
+- 🎭 **Playwright-managed Chromium** (installed via `playwright install chromium` — detected automatically, no system browser required)
+
+Detection works on **Windows, macOS and Linux**.
+
+> [!NOTE]
+> Firefox is listed when present, but its CDP remote-debugging mode is experimental. Chromium-based browsers are recommended for reliable cookie sync.
+
+---
+
+## 📦 Installation
+
+### Option A — Automated installer (recommended)
+
+Installs the Python dependencies **and** a Playwright Chromium, then verifies everything and prints the browsers it detected:
+
+```bash
+python3 install.py
+```
+
+Useful flags:
+- `python3 install.py --skip-browser` — install dependencies only (you'll use a system browser).
+- `python3 install.py --with-deps` — also install OS-level browser libraries (Linux; may require `sudo`).
+
+### Option B — Manual
+
+```bash
+pip install -r requirements.txt
+playwright install chromium   # optional if you already have Edge/Chrome/Brave
+```
+
+> Requires **Python 3.9+**.
+
+---
+
+## 💻 Running the Launcher
+
+Start the interactive console on **Linux, macOS or Windows**:
+
+```bash
+python3 start.py
+```
+
+### 🔍 Launch pipeline
+1. **Platform detection** — Windows, macOS or Linux, automatically.
+2. **Quota/session reset** — prompts you to clear cookies if you ran out of quota or want a different account.
+3. **API key setup** — optionally enforce a security API key (leave blank to accept any key).
+4. **Browser autodiscovery** — scans your system **and** Playwright for browsers and lets you pick one.
+5. **Countdown sync** — launches the browser in debugging mode with a dedicated profile and counts down while you log in to `https://hyperagent.com`.
+6. **Split-screen dashboard** — local/global IPs, ports, and instructions. Press any key to reveal live traffic logs.
+7. **Reset hotkey** — hit `Ctrl + N` while logs are active to reset cookies, restart, and sign in again.
+
+> [!TIP]
+> The debug browser uses a dedicated, persistent profile under your user data directory. This keeps you logged in across restarts **and** guarantees the remote-debugging port opens even if your everyday browser is already running.
+
+---
+
+## ⚙️ Configuration (Environment Variables)
+
+| Variable | Default | Description |
+| :--- | :--- | :--- |
+| `PROXY_API_KEY` | *(empty)* | If set, clients must send `Authorization: Bearer <key>`. |
+| `HOST` | `127.0.0.1` | Bind address for the proxy server (the launcher uses `0.0.0.0`). |
+| `PORT` | `8000` | Port for the proxy server (the launcher assigns a random one). |
+| `LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING` or `ERROR`. |
+| `LOG_TO_FILE` | `off` | Set to `1` to also write rotating logs to `logs/hyperagent-proxy.log`. |
+| `LOG_FILE` | *(unset)* | Explicit log-file path (implies file logging). |
+| `LOG_DIR` | `logs` | Directory for the log file when `LOG_FILE` is not set. |
+
+### 🧵 Sessions & threads
+
+| Variable | Default | Description |
+| :--- | :--- | :--- |
+| `SESSION_PERSIST` | `1` | Persist the session→thread map to SQLite (survives restarts). |
+| `SESSION_DB_PATH` | `sessions.db` | SQLite file path (set to `:memory:` for memory-only). |
+| `SESSION_TTL_SECONDS` | `21600` | Idle lifetime of a session mapping (6h). |
+| `SESSION_MAX` | `1000` | Max mappings kept in memory (LRU eviction). |
+| `SESSION_HEADER` | `X-Session-Id` | Request header a client can send to pin a conversation. |
+
+You can also pin a thread inline via the model id using an `@suffix`, e.g. `hyperag2api/opus-latest@my-project`. Any request with the same suffix reuses the same thread. Precedence: `X-Session-Id` header → model `@suffix` → OpenAI `user` field → automatic history matching.
+
+### 🧠 Behaviour & features
+
+| Variable | Default | Description |
+| :--- | :--- | :--- |
+| `REASONING_STYLE` | `reasoning_content` | `reasoning_content` (native field), `think_tags` (`<think>…</think>` inline), or `both`. |
+| `INJECT_PLAN_MODE` | `0` | Force Hyperagent plan mode on every request. |
+| `TOOLCALL_MODE` | `content` | Surface backend tool activity: `content`, `openai` (real `tool_calls`), or `off`. |
+| `ENABLE_MULTIMODAL` | `1` | Upload & attach `image_url` content parts. |
+| `ENABLE_USAGE` | `1` | Include approximate token `usage` in responses. |
+| `KEEPALIVE_INTERVAL` | `15` | Seconds of silence before an SSE keepalive comment (`0` disables). |
+| `SEARCH_MODE` | `exa` | Search mode sent in the chat payload. |
+| `ENABLE_WEB_SEARCH`, `ENABLE_BROWSER`, `ENABLE_IMAGE_GENERATION`, … | `0` | Per-capability toggles forwarded to the Hyperagent chat payload. |
+
+### 🛡️ Stability / networking
+
+| Variable | Default | Description |
+| :--- | :--- | :--- |
+| `COOKIE_TTL_SECONDS` | `30` | How long fetched cookies are cached before re-reading over CDP. |
+| `HTTP_CONNECT_TIMEOUT` | `10` | Connection timeout (seconds). |
+| `REQUEST_READ_TIMEOUT` | `60` | Read timeout for one-shot create/warm calls. |
+| `STREAM_READ_TIMEOUT` | `300` | Read timeout for streaming responses. |
+| `MAX_RETRIES` | `3` | Retries for transient (429/5xx/network) failures on create/warm. |
+| `RETRY_BASE_DELAY` | `0.5` | Base delay for exponential backoff (seconds). |
+
+### 📊 Endpoints
+
+| Path | Description |
+| :--- | :--- |
+| `/v1/chat/completions` | OpenAI-compatible chat (streaming & non-streaming). |
+| `/v1/models` | Model list. |
+| `/health` | Readiness: browser connectivity + login state. |
+| `/dashboard` | Live read-only monitoring UI. |
+| `/api/stats` | JSON stats (sessions, recent requests, counters). |
+
+Run the server standalone (without the launcher):
+
+```bash
+PORT=8080 LOG_LEVEL=DEBUG python3 proxy_server.py
+```
+
+---
+
+## 🧪 Development & Tests
+
+The project ships a full unit-test suite (mocked — no network or real browser required):
+
+```bash
+python3 -m unittest discover -p "test_*.py" -v
+```
+
+---
+
+## 🛠️ OpenCode Configuration
+
+### 1️⃣ Open the config file
+- **Linux/macOS:** `~/.config/opencode/opencode.jsonc`
+- **Windows:** `%APPDATA%\opencode\opencode.jsonc`
+
+### 2️⃣ Add the provider
+
+```json
+"provider": {
+  "hyperag2api": {
+    "name": "hyperag2api",
+    "npm": "@ai-sdk/openai-compatible",
+    "options": {
+      "baseURL": "http://localhost:<PORT>/v1",
+      "apiKey": "<YOUR_API_KEY>"
+    },
+    "models": {
+      "opus-latest": { "name": "Claude Opus 4.8" },
+      "sonnet-5": { "name": "Claude Sonnet 5" },
+      "gpt-5.6-sol": { "name": "GPT 5.6 Sol" },
+      "gemini-3.5-flash": { "name": "Gemini 3.5 Flash" },
+      "deepseek-v4-pro": { "name": "DeepSeek V4 Pro" },
+      "grok-4.5": { "name": "Grok 4.5" }
+    }
+  }
+}
+```
+
+> [!IMPORTANT]
+> - Replace `<PORT>` with the random port shown in the launcher terminal.
+> - Replace `<YOUR_API_KEY>` with your enforced key (or any string if key enforcement is disabled).
+
+### 3️⃣ Use it
+Select the models from the OpenCode dropdown, or reference them as `hyperag2api/opus-latest`, `hyperag2api/gpt-5.6-sol`, etc.
+
+---
+
+## 🤖 Supported Models
+
+| Provider | Model Identifier | Hyperagent Engine |
+| :--- | :--- | :--- |
+| **Anthropic** | `hyperag2api/opus-latest` | Claude Opus 4.8 |
+| **Anthropic** | `hyperag2api/sonnet-5` | Claude Sonnet 5 |
+| **Anthropic** | `hyperag2api/haiku-4` | Claude Haiku 4.5 |
+| **Anthropic** | `hyperag2api/fable` | Fable 5 |
+| **OpenAI** | `hyperag2api/gpt-5.6-sol` | GPT 5.6 Sol (Reasoning) |
+| **OpenAI** | `hyperag2api/gpt-5.6-terra` | GPT 5.6 Terra |
+| **OpenAI** | `hyperag2api/gpt-5.6-luna` | GPT 5.6 Luna |
+| **Google** | `hyperag2api/gemini-3.5-flash` | Gemini 3.5 Flash |
+| **DeepSeek** | `hyperag2api/deepseek-v4-pro` | DeepSeek V4 Pro |
+| **xAI** | `hyperag2api/grok-4.5` | Grok 4.5 |
+| **Alibaba** | `hyperag2api/qwen3.7-plus` | Qwen 3.7 Plus |
+| **Moonshot** | `hyperag2api/kimi-k2.6` | Kimi K2.6 |
+| **Zhipu** | `hyperag2api/glm-5.2-fast` | GLM 5.2 Fast |
+| **Other** | `hyperag2api/fugu-ultra` | Fugu Ultra |
+
+---
+
+## ⚖️ Disclaimer
+
+`hyperag2api` drives your **own** authenticated Hyperagent session through its web endpoints. It is an unofficial, community project and is not affiliated with or endorsed by Hyperagent. Use it in accordance with Hyperagent's Terms of Service and only with an account you own. Keep your session cookies private — treat them like a password.
+
+## 📄 License
+
+[MIT](LICENSE)

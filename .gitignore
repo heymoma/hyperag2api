@@ -1,0 +1,41 @@
+# Local credentials and environments
+.env
+
+# Python build/cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Packaging & virtual envs
+build/
+dist/
+*.egg-info/
+.eggs/
+.venv/
+venv/
+.pytest_cache/
+
+# Operating system files
+.DS_Store
+Thumbs.db
+
+# Project logs & temporary runs
+logs/
+.system_generated/
+*.log
+
+# Test suites & diagnostic scripts
+run_tests.py
+test_proxy.py
+discover_models.py
+inject_opencode_config.py
+scratch/
+
+# Captured browser snapshots & test dumps
+captured_api_calls.json
+hyperagent_dom_snapshot.md
+hyperagent_model_selector.md
+hyperagent_network.txt
+hyperagent_screenshot.png
+

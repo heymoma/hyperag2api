@@ -1,0 +1,238 @@
+# 🚀 hyperag2api
+
+[English](README.md) · **Русский**
+
+<p align="center">
+  <a href="https://hyperagent.com">
+    <img src="https://img.shields.io/badge/Powered%20by-Hyperagent-0052FF?style=for-the-badge" alt="Powered by Hyperagent" />
+  </a>
+  <img src="https://img.shields.io/badge/python-3.9%2B-blue?style=for-the-badge" alt="Python 3.9+" />
+  <img src="https://img.shields.io/badge/license-MIT-green?style=for-the-badge" alt="MIT License" />
+</p>
+
+---
+
+**`hyperag2api`** — производительный кросс-платформенный **OpenAI-совместимый** прокси-сервер для **[Hyperagent.com](https://hyperagent.com)**. Он поднимает локальный эндпоинт `/v1/chat/completions` и проксирует запросы в бэкенд Hyperagent, используя сессию твоего залогиненного браузера — так продвинутые модели (*Claude Opus 4.8*, *GPT 5.6*, *Gemini 3.5*, *Grok 4.5* и др.) доступны из **OpenCode**, **Continue**, **Cursor** или любого своего OpenAI-клиента.
+
+---
+
+## ✨ Возможности
+
+- 🧵 **Сессия → тред** — один тред Hyperagent на разговор, переиспользуется между ходами. Вместо создания нового треда (и повторной отправки всей истории) на каждый запрос прокси распознаёт продолжение диалога и шлёт только новое сообщение. Опциональная **персистентность на SQLite** сохраняет привязку между перезапусками, а **именованные сессии** позволяют закрепить тред явно.
+- 🧠 **Показ размышлений** — reasoning модели стримится как OpenAI `reasoning_content` и/или встроенными тегами `<think>…</think>` (`REASONING_STYLE`).
+- 🛡️ **Стабильность** — кэш cookie с коротким TTL поверх одного CDP-подключения, авто-переавторизация при 401/403, раздельные таймауты connect/stream, ретраи с экспоненциальной задержкой, устойчивый разбор SSE и keepalive-heartbeat, чтобы длинные генерации не отваливались по таймауту.
+- 🔧 **Проброс tool-calls** — активность инструментов бэкенда можно отдавать как OpenAI `tool_calls`-дельты (`TOOLCALL_MODE`).
+- 🖼️ **Мультимодальный ввод** — части контента `image_url` загружаются через `/api/files/upload` и привязываются к треду через `/api/threads/{id}/attachments`.
+- 📊 **Живая панель** — read-only монитор на `/dashboard` (плюс JSON на `/api/stats`): активные сессии, последние запросы, задержки, токены, состояние браузера/cookie.
+- ❤️ **Health-проба** — `/health` показывает связь с браузером и состояние логина.
+
+> Режим планирования по умолчанию **выключен** (`INJECT_PLAN_MODE=0`): модель выполняет работу, а не только предлагает план. Steering/`AskQuestion` при этом по-прежнему распознаётся и отображается.
+
+---
+
+## ⚡ Требования
+
+Чтобы корректно снимать сессионные cookie, нужен **хотя бы один браузер на Chromium**, которым лаунчер сможет управлять по CDP. Автоопределяются:
+
+- 💻 **Microsoft Edge** (рекомендуется)
+- 🌐 **Google Chrome**
+- 🦁 **Brave Browser**
+- 📦 **Chromium**
+- 🎭 **Playwright-Chromium** (ставится через `playwright install chromium` — определяется автоматически, системный браузер не нужен)
+
+Определение работает на **Windows, macOS и Linux**.
+
+> [!NOTE]
+> Firefox отображается, если установлен, но его режим удалённой отладки CDP экспериментальный. Для надёжной синхронизации cookie рекомендуются браузеры на Chromium.
+
+---
+
+## 📦 Установка
+
+### Вариант A — Автоматический установщик (рекомендуется)
+
+Ставит зависимости Python **и** Playwright-Chromium, проверяет окружение и печатает найденные браузеры:
+
+```bash
+python3 install.py
+```
+
+Полезные флаги:
+- `python3 install.py --skip-browser` — только зависимости (будешь использовать системный браузер).
+- `python3 install.py --with-deps` — также поставить системные библиотеки браузера (Linux; может потребоваться `sudo`).
+
+### Вариант B — Вручную
+
+```bash
+pip install -r requirements.txt
+playwright install chromium   # необязательно, если уже есть Edge/Chrome/Brave
+```
+
+> Требуется **Python 3.9+**.
+
+---
+
+## 💻 Запуск лаунчера
+
+Запусти интерактивную консоль на **Linux, macOS или Windows**:
+
+```bash
+python3 start.py
+```
+
+### 🔍 Пайплайн запуска
+1. **Определение платформы** — Windows, macOS или Linux автоматически.
+2. **Сброс квоты/сессии** — предложит очистить cookie, если кончилась квота или нужен другой аккаунт.
+3. **Настройка API-ключа** — опционально включить защитный API-ключ (пусто = принимать любой).
+4. **Автопоиск браузера** — сканирует систему **и** Playwright и даёт выбрать браузер.
+5. **Обратный отсчёт** — запускает браузер в режиме отладки с выделенным профилем и отсчитывает время, пока ты логинишься на `https://hyperagent.com`.
+6. **Сплит-панель** — локальные/глобальные IP, порты и инструкции. Нажми любую клавишу, чтобы показать живые логи трафика.
+7. **Хоткей сброса** — нажми `Ctrl + N` при активных логах, чтобы мгновенно сбросить cookie, перезапуститься и войти заново.
+
+> [!TIP]
+> Отладочный браузер использует выделенный постоянный профиль в твоей пользовательской папке. Это сохраняет логин между перезапусками **и** гарантирует, что порт отладки откроется, даже если обычный браузер уже запущен.
+
+---
+
+## ⚙️ Конфигурация (переменные окружения)
+
+| Переменная | По умолчанию | Описание |
+| :--- | :--- | :--- |
+| `PROXY_API_KEY` | *(пусто)* | Если задан — клиенты обязаны слать `Authorization: Bearer <key>`. |
+| `HOST` | `127.0.0.1` | Адрес привязки сервера (лаунчер использует `0.0.0.0`). |
+| `PORT` | `8000` | Порт сервера (лаунчер назначает случайный). |
+| `LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING` или `ERROR`. |
+| `LOG_TO_FILE` | `off` | `1` — писать ротируемые логи в `logs/hyperagent-proxy.log`. |
+| `LOG_FILE` | *(не задан)* | Явный путь к лог-файлу (включает файловое логирование). |
+| `LOG_DIR` | `logs` | Каталог для лог-файла, если `LOG_FILE` не задан. |
+
+### 🧵 Сессии и треды
+
+| Переменная | По умолчанию | Описание |
+| :--- | :--- | :--- |
+| `SESSION_PERSIST` | `1` | Сохранять карту сессия→тред в SQLite (переживает перезапуск). |
+| `SESSION_DB_PATH` | `sessions.db` | Путь к файлу SQLite (`:memory:` — только в памяти). |
+| `SESSION_TTL_SECONDS` | `21600` | Время жизни простаивающей привязки (6 ч). |
+| `SESSION_MAX` | `1000` | Максимум привязок в памяти (вытеснение по LRU). |
+| `SESSION_HEADER` | `X-Session-Id` | Заголовок, которым клиент может закрепить разговор. |
+
+Тред можно закрепить и через суффикс в id модели: `hyperag2api/opus-latest@my-project`. Любой запрос с тем же суффиксом переиспользует тот же тред. Приоритет: заголовок `X-Session-Id` → суффикс `@` в модели → поле `user` OpenAI → автоматическое совпадение по истории.
+
+### 🧠 Поведение и фичи
+
+| Переменная | По умолчанию | Описание |
+| :--- | :--- | :--- |
+| `REASONING_STYLE` | `reasoning_content` | `reasoning_content` (нативное поле), `think_tags` (`<think>…</think>` в тексте) или `both`. |
+| `INJECT_PLAN_MODE` | `0` | Принудительно включать режим планирования на каждый запрос. |
+| `TOOLCALL_MODE` | `content` | Как отдавать активность инструментов: `content`, `openai` (реальные `tool_calls`) или `off`. |
+| `ENABLE_MULTIMODAL` | `1` | Загружать и прикреплять части контента `image_url`. |
+| `ENABLE_USAGE` | `1` | Включать приблизительный `usage` (токены) в ответы. |
+| `KEEPALIVE_INTERVAL` | `15` | Секунд тишины до keepalive-комментария SSE (`0` — выкл). |
+| `SEARCH_MODE` | `exa` | Режим поиска в payload чата. |
+| `ENABLE_WEB_SEARCH`, `ENABLE_BROWSER`, `ENABLE_IMAGE_GENERATION`, … | `0` | Тумблеры отдельных возможностей, прокидываемые в payload чата. |
+
+### 🛡️ Стабильность / сеть
+
+| Переменная | По умолчанию | Описание |
+| :--- | :--- | :--- |
+| `COOKIE_TTL_SECONDS` | `30` | Сколько кэшировать cookie перед повторным чтением по CDP. |
+| `HTTP_CONNECT_TIMEOUT` | `10` | Таймаут подключения (сек). |
+| `REQUEST_READ_TIMEOUT` | `60` | Таймаут чтения для разовых вызовов create/warm. |
+| `STREAM_READ_TIMEOUT` | `300` | Таймаут чтения для стриминга. |
+| `MAX_RETRIES` | `3` | Ретраи при временных сбоях (429/5xx/сеть) на create/warm. |
+| `RETRY_BASE_DELAY` | `0.5` | Базовая задержка экспоненциального backoff (сек). |
+
+### 📊 Эндпоинты
+
+| Путь | Описание |
+| :--- | :--- |
+| `/v1/chat/completions` | OpenAI-совместимый чат (стриминг и без). |
+| `/v1/models` | Список моделей. |
+| `/health` | Готовность: связь с браузером + состояние логина. |
+| `/dashboard` | Живая read-only панель мониторинга. |
+| `/api/stats` | JSON-статистика (сессии, последние запросы, счётчики). |
+
+Запуск сервера отдельно (без лаунчера):
+
+```bash
+PORT=8080 LOG_LEVEL=DEBUG python3 proxy_server.py
+```
+
+---
+
+## 🧪 Разработка и тесты
+
+В проекте есть полный набор юнит-тестов (на моках — без сети и реального браузера):
+
+```bash
+python3 -m unittest discover -p "test_*.py" -v
+```
+
+---
+
+## 🛠️ Настройка OpenCode
+
+### 1️⃣ Открой конфиг
+- **Linux/macOS:** `~/.config/opencode/opencode.jsonc`
+- **Windows:** `%APPDATA%\opencode\opencode.jsonc`
+
+### 2️⃣ Добавь провайдера
+
+```json
+"provider": {
+  "hyperag2api": {
+    "name": "hyperag2api",
+    "npm": "@ai-sdk/openai-compatible",
+    "options": {
+      "baseURL": "http://localhost:<PORT>/v1",
+      "apiKey": "<YOUR_API_KEY>"
+    },
+    "models": {
+      "opus-latest": { "name": "Claude Opus 4.8" },
+      "sonnet-5": { "name": "Claude Sonnet 5" },
+      "gpt-5.6-sol": { "name": "GPT 5.6 Sol" },
+      "gemini-3.5-flash": { "name": "Gemini 3.5 Flash" },
+      "deepseek-v4-pro": { "name": "DeepSeek V4 Pro" },
+      "grok-4.5": { "name": "Grok 4.5" }
+    }
+  }
+}
+```
+
+> [!IMPORTANT]
+> - Замени `<PORT>` на случайный порт из терминала лаунчера.
+> - Замени `<YOUR_API_KEY>` на свой ключ (или любую строку, если ключ не включён).
+
+### 3️⃣ Использование
+Выбирай модели в выпадающем списке OpenCode или ссылайся на них как `hyperag2api/opus-latest`, `hyperag2api/gpt-5.6-sol` и т. д.
+
+---
+
+## 🤖 Поддерживаемые модели
+
+| Провайдер | Идентификатор модели | Движок Hyperagent |
+| :--- | :--- | :--- |
+| **Anthropic** | `hyperag2api/opus-latest` | Claude Opus 4.8 |
+| **Anthropic** | `hyperag2api/sonnet-5` | Claude Sonnet 5 |
+| **Anthropic** | `hyperag2api/haiku-4` | Claude Haiku 4.5 |
+| **Anthropic** | `hyperag2api/fable` | Fable 5 |
+| **OpenAI** | `hyperag2api/gpt-5.6-sol` | GPT 5.6 Sol (Reasoning) |
+| **OpenAI** | `hyperag2api/gpt-5.6-terra` | GPT 5.6 Terra |
+| **OpenAI** | `hyperag2api/gpt-5.6-luna` | GPT 5.6 Luna |
+| **Google** | `hyperag2api/gemini-3.5-flash` | Gemini 3.5 Flash |
+| **DeepSeek** | `hyperag2api/deepseek-v4-pro` | DeepSeek V4 Pro |
+| **xAI** | `hyperag2api/grok-4.5` | Grok 4.5 |
+| **Alibaba** | `hyperag2api/qwen3.7-plus` | Qwen 3.7 Plus |
+| **Moonshot** | `hyperag2api/kimi-k2.6` | Kimi K2.6 |
+| **Zhipu** | `hyperag2api/glm-5.2-fast` | GLM 5.2 Fast |
+| **Другое** | `hyperag2api/fugu-ultra` | Fugu Ultra |
+
+---
+
+## ⚖️ Дисклеймер
+
+`hyperag2api` работает через твою **собственную** авторизованную сессию Hyperagent и его веб-эндпоинты. Это неофициальный community-проект, не связанный с Hyperagent. Используй его в соответствии с условиями использования Hyperagent и только с аккаунтом, которым владеешь. Держи сессионные cookie в секрете — относись к ним как к паролю.
+
+## 📄 Лицензия
+
+[MIT](LICENSE)

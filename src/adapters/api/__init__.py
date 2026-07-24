@@ -1,0 +1,1 @@
+"""src.adapters.api package."""
