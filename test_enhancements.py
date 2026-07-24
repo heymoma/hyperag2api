@@ -233,6 +233,31 @@ class TestToolBridge(unittest.TestCase):
         self.assertTrue(tool_bridge.tools_disabled("none"))
         self.assertFalse(tool_bridge.tools_disabled("auto"))
 
+    def test_parse_fenced_fallback(self):
+        from src.services import tool_bridge
+        text = '```json\n{"name": "get_weather", "arguments": {"city": "Rome"}}\n```'
+        calls = tool_bridge.parse_tool_calls(text)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["function"]["name"], "get_weather")
+
+    def test_parse_dedup(self):
+        from src.services import tool_bridge
+        text = ('<tool_call>{"name":"a","arguments":{"x":1}}</tool_call>'
+                '<tool_call>{"name":"a","arguments":{"x":1}}</tool_call>')
+        self.assertEqual(len(tool_bridge.parse_tool_calls(text)), 1)
+
+    def test_reminder_is_compact(self):
+        from src.services import tool_bridge
+        rem = tool_bridge.build_tool_reminder()
+        self.assertIn("<tool_call>", rem)
+        self.assertLess(len(rem), 260)
+
+    def test_server_tools_off_flags(self):
+        flags = config.server_tools_off_flags()
+        self.assertFalse(flags["enableWebSearch"])
+        self.assertFalse(flags["enableBrowser"])
+        self.assertFalse(flags["injectPlanMode"])
+
 
 class TestToolCalling(unittest.IsolatedAsyncioTestCase):
     def setUp(self):

@@ -127,6 +127,7 @@ You can also pin a thread inline via the model id using an `@suffix`, e.g. `hype
 | `INJECT_PLAN_MODE` | `0` | Force Hyperagent plan mode on every request. |
 | `TOOLCALL_MODE` | `content` | Surface backend tool activity: `content`, `openai` (real `tool_calls`), or `off`. |
 | `ENABLE_MULTIMODAL` | `1` | Upload & attach `image_url` content parts. |
+| `DISABLE_SERVER_MCP` | `1` | During client tool-calling turns, force Hyperagent's own tools/MCP off so the server agent delegates to your client. |
 | `ENABLE_USAGE` | `1` | Include approximate token `usage` in responses. |
 | `KEEPALIVE_INTERVAL` | `15` | Seconds of silence before an SSE keepalive comment (`0` disables). |
 | `SEARCH_MODE` | `exa` | Search mode sent in the chat payload. |
@@ -172,11 +173,18 @@ The proxy implements the OpenAI tool-calling loop **on top of** Hyperagent's ser
 
 It engages automatically whenever a request carries `tools` (no config needed). `tool_choice` supports `auto` (default), `required`, `none`, and a specific `{function}`.
 
+**Token-lean by design:**
+- The full tool schema block is injected **once per thread**; later turns of the same conversation get only a one-line reminder.
+- Tool JSON schemas are **minified**, and only the newest turn's delta is ever sent (thanks to thread reuse) — not the whole history.
+
+**Server-side tools/MCP are kept out of the way:**
+- During a tool-calling turn the proxy forces Hyperagent's own capabilities **off** (web search, browser, code, integrations, plan mode) so the **server agent delegates everything to your client** instead of doing its own thing. Controlled by `DISABLE_SERVER_MCP` (default on). `enabledIntegrations` is always empty, so Hyperagent's own MCP never fires.
+
 **Notes & limits:**
-- This is a **prompt-level bridge**, not native function calling — reliable for the common single/parallel-call loop, but not guaranteed for every edge case.
+- This is a **prompt-level bridge**, not native function calling — reliable for the common single/parallel-call loop, but not guaranteed for every edge case. It accepts both `<tool_call>{…}</tool_call>` and fenced ```tool_call``` / ```json``` blocks.
 - In tool mode the response is **buffered** (not token-streamed) so tool calls are detected reliably.
-- The functions run **on your client side** (your MCP), not on Hyperagent.
-- For long tool loops, pin the conversation with the `X-Session-Id` header (or `model@session`) for rock-solid thread reuse.
+- The functions run **on your client side** (your MCP), not on Hyperagent — so **any** client MCP (Figma, filesystem, GitHub, …) works; the proxy is tool-agnostic.
+- Many tools = a larger one-time preamble; for big tool sets and long loops, pin the conversation with `X-Session-Id` (or `model@session`) for rock-solid reuse.
 
 ---
 

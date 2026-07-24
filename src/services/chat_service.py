@@ -54,6 +54,9 @@ class ChatService:
         self.cookie_provider = cookie_provider
         self.chat_backend = chat_backend
         self.session_store = session_store or SessionStore.from_config()
+        # Threads that have already received the full tool preamble this process,
+        # so continuation turns send only a one-line reminder (token optimization).
+        self._tools_primed: set = set()
 
     # ------------------------------------------------------------------ #
     # Model listing                                                       #
@@ -503,7 +506,10 @@ class ChatService:
             return
 
         yield format_openai_chunk(chat_id, model, "", role="assistant")
-        preamble = tool_bridge.build_tool_preamble(req.tools, req.tool_choice)
+        full_preamble = tool_bridge.build_tool_preamble(req.tools, req.tool_choice)
+        # Server-side tools/MCP are forced off during tool turns so the server
+        # agent delegates everything to the client instead of acting on its own.
+        tool_flags = config.server_tools_off_flags() if config.DISABLE_SERVER_MCP else None
         thread_id: Optional[str] = None
         finish_reason = "stop"
         try:
@@ -512,9 +518,13 @@ class ChatService:
                 thread_id = rec["thread_id"]
                 count = int(rec.get("message_count") or 0)
                 reused = True
+                # Token optimization: only re-send the full schema block if this
+                # thread hasn't been primed this process; otherwise a 1-line hint.
+                primed = thread_id in self._tools_primed
+                pre = full_preamble if not primed else tool_bridge.build_tool_reminder()
                 tail = req.messages[count:] if count < len(req.messages) else []
-                content = self._build_tool_delta(tail, preamble) or self._latest_user_text(req.messages)
-                logger.info("Tool-mode: reusing thread %s (count=%d)", thread_id, count)
+                content = self._build_tool_delta(tail, pre) or self._latest_user_text(req.messages)
+                logger.info("Tool-mode: reusing thread %s (count=%d, primed=%s)", thread_id, count, primed)
             else:
                 thread_id = await self.chat_backend.create_thread(
                     mapped_model, system_prompt, cookies, session_id=explicit
@@ -524,9 +534,11 @@ class ChatService:
                 user_text = self._latest_user_text(req.messages) or combined_prompt
                 # Deliver the tool contract in the USER turn — the platform's own
                 # agent system prompt otherwise overrides an injected systemPrompt.
-                content = (preamble + "\n\n---\n\nUser request:\n" + user_text) if preamble else user_text
+                content = (full_preamble + "\n\n---\n\nUser request:\n" + user_text) if full_preamble else user_text
                 logger.info("Tool-mode: created thread %s", thread_id)
 
+            if thread_id:
+                self._tools_primed.add(thread_id)
             meta["thread_id"] = thread_id
             meta["reused_thread"] = reused
             attachments = await self._collect_attachments(req, thread_id, cookies)
@@ -535,7 +547,8 @@ class ChatService:
             text_buf = ""
             reason_buf = ""
             async for data in self.chat_backend.stream_chat(
-                thread_id, content, cookies, session_id=explicit, attachments=attachments
+                thread_id, content, cookies, session_id=explicit,
+                attachments=attachments, feature_flags=tool_flags,
             ):
                 if not isinstance(data, dict):
                     continue

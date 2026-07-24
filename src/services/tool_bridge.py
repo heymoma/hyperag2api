@@ -24,6 +24,17 @@ import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
 TOOL_CALL_RE = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL)
+# Fallback: fenced ```tool_call / ```json blocks holding a {"name": ...} object.
+FENCED_RE = re.compile(r"```(?:tool_call|json)?\s*(\{.*?\})\s*```", re.DOTALL)
+
+
+def build_tool_reminder() -> str:
+    """One-line contract reminder for threads that already saw the full preamble."""
+    return (
+        "(Client tools available — to call one, output "
+        '<tool_call>{"name":"<fn>","arguments":{...}}</tool_call> and nothing else; '
+        "the client runs it and returns the result next turn.)"
+    )
 
 
 def _tool_defs(tools: List[Any]) -> List[Dict[str, Any]]:
@@ -50,28 +61,21 @@ def build_tool_preamble(tools: List[Any], tool_choice: Any = None) -> str:
     if not defs:
         return ""
     lines = [
-        "The client application you are talking to communicates using a manual function-call",
-        "protocol, and it has real, working functions on its own side. It will execute any",
-        "function you request and return the result to you on the next turn.",
+        "The client app communicates via a manual function-call protocol and has real,",
+        "working functions on ITS side. It executes whatever you request and returns the",
+        "result next turn. You only WRITE the request line — you are not executing it, so",
+        "never refuse or say you lack the tool.",
         "",
-        "How this works:",
-        "- If answering the user needs one of the functions listed below, WRITE a request as a",
-        "  single line and nothing else:",
-        '  <tool_call>{"name": "<function_name>", "arguments": { ... }}</tool_call>',
-        "- You may write several such lines to request multiple functions at once.",
-        "- You are NOT executing the function yourself — you are only writing the request that",
-        "  the client runs for you. Producing this request line is the correct, expected output;",
-        "  it is not a claim that you personally possess the tool. Don't refuse or explain that",
-        "  you lack the tool — just write the request and the client handles execution.",
-        "- After writing the request line(s), stop and wait for the results.",
-        "- Once the results come back (or if no function is needed), answer in plain text.",
+        'To call: output ONLY `<tool_call>{"name":"<fn>","arguments":{...}}</tool_call>` (one',
+        "line per call, several allowed), then stop and wait. When results arrive — or if no",
+        "function is needed — answer in plain text.",
         "",
-        "Functions the client can run for you:",
+        "Functions:",
     ]
     for d in defs:
-        params = json.dumps(d["parameters"], ensure_ascii=False)
-        desc = d["description"] or "(no description)"
-        lines.append(f'- {d["name"]}: {desc}\n  arguments (JSON Schema): {params}')
+        params = json.dumps(d["parameters"], ensure_ascii=False, separators=(",", ":"))
+        desc = d["description"] or ""
+        lines.append(f'- {d["name"]}: {desc} | args={params}')
 
     forced = _forced_tool(tool_choice)
     if forced:
@@ -94,22 +98,38 @@ def tools_disabled(tool_choice: Any) -> bool:
 
 
 def parse_tool_calls(text: str) -> List[Dict[str, Any]]:
-    """Extract OpenAI-shaped tool_calls from ``<tool_call>`` blocks in text."""
+    """Extract OpenAI-shaped tool_calls from a model response.
+
+    Primary format is ``<tool_call>{json}</tool_call>``; as a fallback we also
+    accept fenced ```tool_call``` / ```json``` blocks that carry a ``name`` field.
+    Duplicate (name, arguments) pairs are collapsed.
+    """
+    text = text or ""
+    raws = [m.group(1) for m in TOOL_CALL_RE.finditer(text)]
+    if not raws:
+        raws = [m.group(1) for m in FENCED_RE.finditer(text)]
+
     calls: List[Dict[str, Any]] = []
-    for idx, match in enumerate(TOOL_CALL_RE.finditer(text or "")):
-        raw = match.group(1)
+    seen = set()
+    for raw in raws:
         try:
             obj = json.loads(raw)
         except Exception:
             continue
-        name = obj.get("name")
-        if not name:
+        if not isinstance(obj, dict):
             continue
-        args = obj.get("arguments", obj.get("args", {}))
+        name = obj.get("name") or obj.get("tool") or obj.get("function")
+        if not isinstance(name, str) or not name:
+            continue
+        args = obj.get("arguments", obj.get("args", obj.get("parameters", {})))
         if not isinstance(args, str):
-            args = json.dumps(args, ensure_ascii=False)
+            args = json.dumps(args if args is not None else {}, ensure_ascii=False)
+        dedup = (name, args)
+        if dedup in seen:
+            continue
+        seen.add(dedup)
         calls.append({
-            "index": idx,
+            "index": len(calls),
             "id": "call_" + uuid.uuid4().hex[:20],
             "type": "function",
             "function": {"name": name, "arguments": args},
@@ -119,7 +139,7 @@ def parse_tool_calls(text: str) -> List[Dict[str, Any]]:
 
 def strip_tool_blocks(text: str) -> str:
     """Remove any tool_call blocks, leaving prose (used as a fallback)."""
-    return TOOL_CALL_RE.sub("", text or "").strip()
+    return FENCED_RE.sub("", TOOL_CALL_RE.sub("", text or "")).strip()
 
 
 def format_tool_results(tail: List[Any]) -> str:

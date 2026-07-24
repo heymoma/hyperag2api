@@ -122,6 +122,12 @@ TOOLCALL_MODE = env_str("TOOLCALL_MODE", "content").strip().lower()
 # Whether to accept image_url content parts and upload them to Hyperagent.
 ENABLE_MULTIMODAL = env_flag("ENABLE_MULTIMODAL", True)
 
+# Keep Hyperagent's OWN server-side MCP/integrations and tools out of the loop so
+# the server agent stays a "pure brain" and delegates to the client's tools.
+# enabledIntegrations is always empty; this additionally forces every server tool
+# flag off while a client-side tool-calling turn is in flight.
+DISABLE_SERVER_MCP = env_flag("DISABLE_SERVER_MCP", True)
+
 # Approximate usage token accounting in responses.
 ENABLE_USAGE = env_flag("ENABLE_USAGE", True)
 
@@ -180,6 +186,17 @@ def get_chat_feature_flags() -> Dict[str, Any]:
     flags["searchMode"] = SEARCH_MODE
     flags["integrationMode"] = env_str("INTEGRATION_MODE", "open")
     flags["injectPlanMode"] = INJECT_PLAN_MODE
+    return flags
+
+
+def server_tools_off_flags() -> Dict[str, Any]:
+    """All server-side capabilities OFF — used during client tool-calling turns
+    so the server agent never runs its own tools/MCP and just delegates to the
+    client. (enabledIntegrations is emptied separately in the payload builder.)"""
+    flags: Dict[str, Any] = {key: False for key in _CHAT_FLAG_ENV}
+    flags["searchMode"] = SEARCH_MODE
+    flags["integrationMode"] = env_str("INTEGRATION_MODE", "open")
+    flags["injectPlanMode"] = False
     return flags
 
 
