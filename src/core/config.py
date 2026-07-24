@@ -1,10 +1,9 @@
 """Central configuration for the Hyperagent Local Proxy.
 
-Everything here is driven by environment variables so the same code can run
-under the interactive launcher, standalone, in Docker, or in tests. Import-time
-constants keep backward compatibility with the original module (``PROXY_API_KEY``,
-``HYPERAGENT_*_API``, ``CDP_*``, ``DEFAULT_HEADERS``, ``MODEL_MAPPING``); the new
-settings are grouped into a small :class:`Settings` snapshot plus a few helpers.
+Settings resolve with the precedence **defaults < config file (YAML) < env vars**,
+so you can keep everything in a ``config.yaml`` and still override any value with
+an environment variable (handy for Docker / CI). The config file path is
+``$CONFIG_FILE`` or ``config.yaml`` / ``config.yml`` in the working directory.
 """
 
 from __future__ import annotations
@@ -14,38 +13,79 @@ from typing import Any, Dict, List, Optional
 
 
 # --------------------------------------------------------------------------- #
-# Small env helpers                                                            #
+# Config file (YAML) loading                                                   #
+# --------------------------------------------------------------------------- #
+def _load_config_file() -> Dict[str, Any]:
+    path = os.environ.get("CONFIG_FILE") or next(
+        (p for p in ("config.yaml", "config.yml") if os.path.exists(p)), ""
+    )
+    if not path or not os.path.exists(path):
+        return {}
+    try:
+        import yaml  # PyYAML
+        with open(path, "r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+_FILE: Dict[str, Any] = _load_config_file()
+
+
+def _lookup(name: str) -> Any:
+    """Value for ``name`` from env (highest priority) then the config file.
+
+    File keys may be given as the exact env name or its lowercase form, so both
+    ``PORT`` and ``port`` work in YAML."""
+    ev = os.environ.get(name)
+    if ev is not None and ev != "":
+        return ev
+    for key in (name, name.lower()):
+        if key in _FILE and _FILE[key] not in (None, ""):
+            return _FILE[key]
+    return None
+
+
+# --------------------------------------------------------------------------- #
+# Small typed helpers (env + config file aware)                                #
 # --------------------------------------------------------------------------- #
 def env_flag(name: str, default: bool = False) -> bool:
-    val = os.environ.get(name)
+    val = _lookup(name)
     if val is None:
         return default
-    return val.strip().lower() in ("1", "true", "yes", "on")
+    if isinstance(val, bool):
+        return val
+    return str(val).strip().lower() in ("1", "true", "yes", "on")
 
 
 def env_int(name: str, default: int) -> int:
+    val = _lookup(name)
     try:
-        return int(os.environ.get(name, "").strip())
-    except (ValueError, AttributeError):
+        return int(str(val).strip())
+    except (ValueError, AttributeError, TypeError):
         return default
 
 
 def env_float(name: str, default: float) -> float:
+    val = _lookup(name)
     try:
-        return float(os.environ.get(name, "").strip())
-    except (ValueError, AttributeError):
+        return float(str(val).strip())
+    except (ValueError, AttributeError, TypeError):
         return default
 
 
 def env_str(name: str, default: str) -> str:
-    val = os.environ.get(name)
-    return val if val is not None and val != "" else default
+    val = _lookup(name)
+    return str(val) if val is not None and val != "" else default
 
 
 # --------------------------------------------------------------------------- #
 # API server                                                                   #
 # --------------------------------------------------------------------------- #
-PROXY_API_KEY = os.environ.get("PROXY_API_KEY", "")
+PROXY_API_KEY = env_str("PROXY_API_KEY", "")
+HOST = env_str("HOST", "127.0.0.1")
+PORT = env_int("PORT", 8000)
 
 # Header a client can send to explicitly pin a conversation to one thread.
 SESSION_HEADER = env_str("SESSION_HEADER", "X-Session-Id")
@@ -73,17 +113,6 @@ HYPERAGENT_BILLING_STATUS_API = f"{HYPERAGENT_BASE_URL}/api/settings/billing/sta
 # {files:[{name, size, mimeType, base64}]} and binds the file to the thread.
 HYPERAGENT_UPLOAD_API = f"{HYPERAGENT_BASE_URL}/api/files/upload"
 HYPERAGENT_ATTACHMENTS_API_TEMPLATE = f"{HYPERAGENT_BASE_URL}/api/threads/{{thread_id}}/attachments"
-
-
-# --------------------------------------------------------------------------- #
-# CDP / browser                                                                #
-# --------------------------------------------------------------------------- #
-CDP_PORT = env_int("CDP_PORT", 9222)
-CDP_HOST = env_str("CDP_HOST", "localhost")
-CDP_URL = f"http://{CDP_HOST}:{CDP_PORT}"
-
-# How long a fetched cookie jar is reused before we re-read it over CDP.
-COOKIE_TTL_SECONDS = env_float("COOKIE_TTL_SECONDS", 30.0)
 
 
 # --------------------------------------------------------------------------- #
@@ -269,22 +298,24 @@ SESSION_SUFFIX_SEP = "@"
 
 
 # --------------------------------------------------------------------------- #
-# Auth source — browser (CDP) vs config-provided session token(s)             #
+# Sessions — config-provided token(s); rotation                                #
 # --------------------------------------------------------------------------- #
-# auto   : use config sessions if any are set, else drive the browser over CDP
-# config : always use config sessions (no browser / Playwright needed)
-# browser: always capture cookies from the running browser over CDP
-SESSION_MODE = env_str("SESSION_MODE", "auto").strip().lower()
 SESSIONS_FILE = env_str("SESSIONS_FILE", "")
+# Pick/keep the account with the most remaining credit and rotate off exhausted
+# ones (in addition to rotating on 401/403).
+ROTATE_BY_BALANCE = env_flag("ROTATE_BY_BALANCE", True)
+# How often (seconds) to refresh per-session balances for balance rotation.
+BALANCE_REFRESH_SECONDS = env_int("BALANCE_REFRESH_SECONDS", 300)
 
 
 def load_sessions() -> List[str]:
-    """Collect Hyperagent session token(s) from env and/or a file.
+    """Collect Hyperagent session token(s), merged and de-duplicated (order kept).
 
-    Sources (all merged, de-duplicated, order preserved):
-    - HYPERAGENT_SESSION       — a single ``__Host-hyperagent_session`` value
-    - HYPERAGENT_SESSIONS      — comma-separated values (multiple accounts)
-    - SESSIONS_FILE            — a file with one token per line, or a JSON array
+    Sources:
+    - HYPERAGENT_SESSION    — a single ``__Host-hyperagent_session`` value
+    - HYPERAGENT_SESSIONS   — comma-separated values (multiple accounts)
+    - config file ``sessions:`` — a YAML list of tokens
+    - SESSIONS_FILE / ``sessions.txt`` — one token per line (``#`` comments) or JSON array
     """
     tokens: List[str] = []
     single = os.environ.get("HYPERAGENT_SESSION", "").strip()
@@ -294,11 +325,18 @@ def load_sessions() -> List[str]:
         t = t.strip()
         if t:
             tokens.append(t)
+    # From the config file: a "sessions" list.
+    file_sessions = _FILE.get("sessions")
+    if isinstance(file_sessions, list):
+        for t in file_sessions:
+            if isinstance(t, str) and t.strip():
+                tokens.append(t.strip())
     # Explicit SESSIONS_FILE, or a default ``sessions.txt`` in the working dir.
     session_file = SESSIONS_FILE or ("sessions.txt" if os.path.exists("sessions.txt") else "")
     if session_file and os.path.exists(session_file):
         try:
-            raw = open(session_file, encoding="utf-8").read().strip()
+            with open(session_file, encoding="utf-8") as _sf:
+                raw = _sf.read().strip()
             if raw.startswith("["):
                 import json as _json
                 for t in _json.loads(raw):

@@ -69,11 +69,14 @@ class ChatService:
     # Account rotation                                                    #
     # ------------------------------------------------------------------ #
     def _session_count(self) -> int:
+        import inspect
         fn = getattr(self.cookie_provider, "count", None)
-        try:
-            return max(1, fn()) if callable(fn) else 1
-        except Exception:
-            return 1
+        if callable(fn) and not inspect.iscoroutinefunction(fn):
+            try:
+                return max(1, int(fn()))
+            except Exception:
+                return 1
+        return 1
 
     async def _create_thread_rotating(self, model, system_prompt, explicit, cookies):
         """Create a thread; on an auth failure rotate to the next configured

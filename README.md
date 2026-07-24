@@ -12,7 +12,7 @@
 
 ---
 
-**`hyperag2api`** is a high-performance, cross-platform, **OpenAI-compatible** proxy server for **[Hyperagent.com](https://hyperagent.com)**. It exposes a local `/v1/chat/completions` endpoint and forwards requests to Hyperagent's backend using your logged-in browser session — so you can drive advanced models (*Claude Opus 4.8*, *GPT 5.6*, *Gemini 3.5*, *Grok 4.5*, and more) from **OpenCode**, **Continue**, **Cursor**, or any custom OpenAI client.
+**`hyperag2api`** is a high-performance, **browserless**, **OpenAI-compatible** proxy server for **[Hyperagent.com](https://hyperagent.com)**. It exposes a local `/v1/chat/completions` endpoint and forwards requests to Hyperagent's backend using a session token from your account (no browser, no Playwright) — so you can drive advanced models (*Claude Opus 4.8*, *GPT 5.6*, *Gemini 3.5*, *Grok 4.5*, and more) from **OpenCode**, **Continue**, **Cursor**, or any custom OpenAI client.
 
 ---
 
@@ -20,90 +20,62 @@
 
 - 🧵 **Session-aware threads** — one Hyperagent thread per conversation, reused across turns. Instead of creating a brand-new thread (and re-sending the entire history) on every request, the proxy recognises follow-up turns and sends only the newest message. Optional **SQLite persistence** keeps the mapping across restarts, and **named sessions** let you pin a thread explicitly.
 - 🧠 **Reasoning / thinking display** — model reasoning is streamed as OpenAI `reasoning_content` and/or inline `<think>…</think>` tags (`REASONING_STYLE`).
-- 🛡️ **Stability** — short-TTL cookie caching over a single CDP connection, automatic re-auth on 401/403, split connect/stream timeouts, exponential-backoff retries, resilient SSE parsing, and SSE keepalive heartbeats so long generations don't time out.
+- 🛡️ **Stability** — automatic account rotation on 401/403, split connect/stream timeouts, exponential-backoff retries, resilient SSE parsing, and SSE keepalive heartbeats so long generations don't time out.
 - 🔧 **Tool-call passthrough** — backend tool activity can surface as OpenAI `tool_calls` deltas (`TOOLCALL_MODE`).
 - 🔌 **Client-side tool calling (MCP / functions)** — bridges the OpenAI function-calling loop over Hyperagent's text agent, so clients like **OpenCode** can use their **own** MCP servers/functions through the proxy. Accepts `tools`, makes the model emit `tool_calls` with `finish_reason: "tool_calls"`, and feeds your `role:"tool"` results back into the same thread. Verified live.
 - 🖼️ **Multimodal input** — `image_url` parts are uploaded via Hyperagent's real presigned flow (`POST /api/uploads` → S3 `PUT` with `If-None-Match: *`) and referenced as `attachmentIds` (verified end-to-end: the model correctly describes uploaded images).
 - 🔁 **Account rotation** — supply multiple sessions; the proxy rotates to the next account on a 401/403.
 - 💳 **Account & balance** — `/accounts` verifies each session and shows the account + pay-as-you-go credit (initial / used / remaining).
-- 📊 **Live dashboard** — a read-only monitor at `/dashboard` (plus JSON at `/api/stats`) showing active sessions, recent requests, latency, tokens, and browser/cookie health.
-- ❤️ **Health probe** — `/health` reports browser connectivity and login state.
+- 📊 **Live dashboard** — a read-only monitor at `/dashboard` showing accounts + remaining balance, active sessions, recent requests, latency, and tokens.
+- ❤️ **Health probe** — `/health` reports session validity and the current account.
 
 > Plan mode is **off by default** (`INJECT_PLAN_MODE=0`): the model does the work instead of only proposing a plan. Steering/`AskQuestion` prompts are still detected and rendered.
 
 ---
 
-## ⚡ Prerequisites
+## 📦 Setup — no browser required
 
-To capture session cookies correctly, you need **at least one Chromium-based browser** the launcher can drive over CDP. It auto-detects any of:
+Requires **Python 3.9+**. No Playwright, no Chromium — authentication uses a session token you paste into config.
 
-- 💻 **Microsoft Edge** (Recommended)
-- 🌐 **Google Chrome**
-- 🦁 **Brave Browser**
-- 📦 **Chromium**
-- 🎭 **Playwright-managed Chromium** (installed via `playwright install chromium` — detected automatically, no system browser required)
+```bash
+pip install -r requirements.txt        # fastapi, uvicorn, httpx, pydantic, PyYAML
+cp config.example.yaml config.yaml     # then edit it (see below)
+python3 start.py                        # runs on http://127.0.0.1:8000
+```
 
-Detection works on **Windows, macOS and Linux**.
+### 🔑 Get your session token
+Grab the value of the **`__Host-hyperagent_session`** cookie from a browser where you're logged in to Hyperagent (DevTools → Application → Cookies → `hyperagent.com`). Paste it under `sessions:` in `config.yaml`. Add several tokens to rotate across accounts.
 
-> [!NOTE]
-> Firefox is listed when present, but its CDP remote-debugging mode is experimental. Chromium-based browsers are recommended for reliable cookie sync.
+> Treat the token like a password. `config.yaml` and `sessions.txt` are git-ignored; tokens are only ever logged as a `…last4` fingerprint.
 
 ---
 
-## 📦 Installation
+## ⚙️ Configuration
 
-### Option A — Automated installer (recommended)
+Settings resolve as **defaults < `config.yaml` < environment variables**. The file is read from `$CONFIG_FILE` or `./config.yaml` (`.yml`). See [`config.example.yaml`](config.example.yaml) for the full annotated template. Every key also has an env-var equivalent (upper-case), e.g. `port:` ↔ `PORT`, `low_latency_mode:` ↔ `LOW_LATENCY_MODE`.
 
-Installs the Python dependencies **and** a Playwright Chromium, then verifies everything and prints the browsers it detected:
-
-```bash
-python3 install.py
+```yaml
+# config.yaml
+sessions:
+  - "your __Host-hyperagent_session value"
+  # - "second account token"
+port: 8000
+proxy_api_key: ""            # if set, clients must send Authorization: Bearer <key>
+rotate_by_balance: true      # prefer the account with the most remaining credit
+low_latency_mode: true       # server-side tools/plan-mode off (fast + cheap)
 ```
 
-Useful flags:
-- `python3 install.py --skip-browser` — install dependencies only (you'll use a system browser).
-- `python3 install.py --with-deps` — also install OS-level browser libraries (Linux; may require `sudo`).
-
-### Option B — Manual
-
-```bash
-pip install -r requirements.txt
-playwright install chromium   # optional if you already have Edge/Chrome/Brave
-```
-
-> Requires **Python 3.9+**.
-
----
-
-## 💻 Running the Launcher
-
-Start the interactive console on **Linux, macOS or Windows**:
-
-```bash
-python3 start.py
-```
-
-### 🔍 Launch pipeline
-1. **Platform detection** — Windows, macOS or Linux, automatically.
-2. **Quota/session reset** — prompts you to clear cookies if you ran out of quota or want a different account.
-3. **API key setup** — optionally enforce a security API key (leave blank to accept any key).
-4. **Browser autodiscovery** — scans your system **and** Playwright for browsers and lets you pick one.
-5. **Countdown sync** — launches the browser in debugging mode with a dedicated profile and counts down while you log in to `https://hyperagent.com`.
-6. **Split-screen dashboard** — local/global IPs, ports, and instructions. Press any key to reveal live traffic logs.
-7. **Reset hotkey** — hit `Ctrl + N` while logs are active to reset cookies, restart, and sign in again.
-
-> [!TIP]
-> The debug browser uses a dedicated, persistent profile under your user data directory. This keeps you logged in across restarts **and** guarantees the remote-debugging port opens even if your everyday browser is already running.
-
----
-
-## ⚙️ Configuration (Environment Variables)
+### Environment variables (override the file)
 
 | Variable | Default | Description |
 | :--- | :--- | :--- |
 | `PROXY_API_KEY` | *(empty)* | If set, clients must send `Authorization: Bearer <key>`. |
-| `HOST` | `127.0.0.1` | Bind address for the proxy server (the launcher uses `0.0.0.0`). |
-| `PORT` | `8000` | Port for the proxy server (the launcher assigns a random one). |
+| `HOST` | `127.0.0.1` | Bind address for the proxy server. |
+| `PORT` | `8000` | Port for the proxy server. |
+| `HYPERAGENT_SESSION` / `HYPERAGENT_SESSIONS` | *(unset)* | Session token(s) — single, or comma-separated for multiple accounts. |
+| `SESSIONS_FILE` | *(unset)* | Path to a token file (defaults to `sessions.txt` if present). |
+| `ROTATE_BY_BALANCE` | `1` | Prefer the account with the most remaining credit. |
+| `BALANCE_REFRESH_SECONDS` | `300` | How often balances are re-checked for rotation. |
 | `LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING` or `ERROR`. |
 | `LOG_TO_FILE` | `off` | Set to `1` to also write rotating logs to `logs/hyperagent-proxy.log`. |
 | `LOG_FILE` | *(unset)* | Explicit log-file path (implies file logging). |
@@ -140,7 +112,6 @@ You can also pin a thread inline via the model id using an `@suffix`, e.g. `hype
 
 | Variable | Default | Description |
 | :--- | :--- | :--- |
-| `COOKIE_TTL_SECONDS` | `30` | How long fetched cookies are cached before re-reading over CDP. |
 | `HTTP_CONNECT_TIMEOUT` | `10` | Connection timeout (seconds). |
 | `REQUEST_READ_TIMEOUT` | `60` | Read timeout for one-shot create/warm calls. |
 | `STREAM_READ_TIMEOUT` | `300` | Read timeout for streaming responses. |
@@ -153,12 +124,12 @@ You can also pin a thread inline via the model id using an `@suffix`, e.g. `hype
 | :--- | :--- |
 | `/v1/chat/completions` | OpenAI-compatible chat (streaming & non-streaming). |
 | `/v1/models` | Model list. |
-| `/health` | Readiness: auth mode, connectivity, login state, account. |
-| `/accounts` | Verify configured session(s) and show the account each belongs to. |
-| `/dashboard` | Live read-only monitoring UI. |
+| `/health` | Readiness: sessions configured, session validity, current account. |
+| `/accounts` | Verify session(s); show account + remaining balance for each. |
+| `/dashboard` | Live read-only monitoring UI (accounts, balance, requests). |
 | `/api/stats` | JSON stats (sessions, recent requests, counters). |
 
-Run the server standalone (without the launcher):
+Run the server directly:
 
 ```bash
 PORT=8080 LOG_LEVEL=DEBUG python3 proxy_server.py
@@ -195,49 +166,29 @@ It engages automatically whenever a request carries `tools` (no config needed). 
 
 ---
 
-## 🔑 Browserless mode (config sessions)
+## 🔑 Sessions, rotation & balance
 
-Don't want to run a browser? Provide your Hyperagent session token directly and the proxy skips Playwright/CDP entirely — great for servers and headless setups.
+Sessions can be supplied three ways (merged, de-duplicated):
 
-Grab the value of the **`__Host-hyperagent_session`** cookie from your logged-in browser (DevTools → Application → Cookies → `hyperagent.com`), then:
+- **`config.yaml`** — a `sessions:` YAML list (recommended).
+- **`sessions.txt`** — one token per line (`#` comments ok), or a JSON array. Point `SESSIONS_FILE` at any path, or just drop `sessions.txt` in the working dir.
+- **Env** — `HYPERAGENT_SESSION` (single) or `HYPERAGENT_SESSIONS` (comma-separated).
 
-```bash
-# single account
-HYPERAGENT_SESSION="<cookie value>" python3 proxy_server.py
+**Rotation.** With multiple accounts the proxy rotates automatically:
+- on a **401/403** while creating a thread → advances to the next account;
+- with **`rotate_by_balance: true`** (default) → orders accounts by **remaining credit** and uses the richest, so an exhausted account naturally falls to the back (balances refresh every `balance_refresh_seconds`).
 
-# multiple accounts (rotated on auth failure)
-HYPERAGENT_SESSIONS="tokenA,tokenB" python3 proxy_server.py
-
-# or from a file (one token per line, or a JSON array)
-SESSIONS_FILE=~/.hyperagent-sessions python3 proxy_server.py
-```
-
-| Variable | Default | Description |
-| :--- | :--- | :--- |
-| `SESSION_MODE` | `auto` | `auto` (config if set, else browser), `config` (never touch a browser), or `browser`. |
-| `HYPERAGENT_SESSION` | *(unset)* | A single `__Host-hyperagent_session` value. |
-| `HYPERAGENT_SESSIONS` | *(unset)* | Comma-separated values (multiple accounts). |
-| `SESSIONS_FILE` | *(unset)* | Path to a file with one token per line, or a JSON array. |
-
-The proxy **verifies each session on startup** (via `/api/auth/me`) and logs which account it belongs to. Check anytime:
+**Verify + balance.** Each session is checked on startup (via `/api/auth/me`) and logged. Anytime:
 
 ```bash
 curl -s localhost:<PORT>/accounts | jq
-# → {"mode":"config","count":1,"accounts":[{
-#      "valid":true,"email":"you@example.com","name":"...","session":"…6fb8",
+# → {"count":1,"total_remaining_usd":298.20,"rotate_by_balance":true,"accounts":[{
+#      "valid":true,"email":"you@example.com","session":"…6fb8",
 #      "balance":{"plan":"Pay As You Go","credit_initial_usd":500,
-#                 "credit_used_usd":178.28,"credit_remaining_usd":321.72}}], ...}
+#                 "credit_used_usd":201.80,"credit_remaining_usd":298.20}}]}
 ```
 
-Tokens are never logged in full — only a `…last4` fingerprint. Treat the session value like a password.
-
-**Multiple accounts & rotation.** Provide several tokens (`HYPERAGENT_SESSIONS=a,b,c`, a `.txt` file, or a JSON array). If a session returns 401/403 while creating a thread, the proxy automatically **rotates to the next account**.
-
-**`.txt` file.** Point `SESSIONS_FILE` at a file (one token per line; `#` comments allowed), or just drop a `sessions.txt` in the working directory and it's picked up automatically.
-
-> **Balance is shown** — pulled live from `/api/settings/billing/*`: plan, initial credit, used, and remaining. (Figures are Hyperagent's own pay-as-you-go credit; the proxy adds nothing to them.)
-
-> **Playwright is now optional** — only needed for `browser` mode. In config mode the proxy runs without it.
+Balance is pulled live from `/api/settings/billing/*` (Hyperagent's own pay-as-you-go credit; the proxy adds nothing). It's also shown on the **`/dashboard`**.
 
 ---
 
@@ -303,7 +254,7 @@ python3 -m unittest discover -p "test_*.py" -v
 ```
 
 > [!IMPORTANT]
-> - Replace `<PORT>` with the random port shown in the launcher terminal.
+> - Replace `<PORT>` with your configured port (default `8000`).
 > - Replace `<YOUR_API_KEY>` with your enforced key (or any string if key enforcement is disabled).
 
 ### 3️⃣ Use it

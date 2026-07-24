@@ -1,0 +1,35 @@
+# hyperag2api — configuration (copy to config.yaml)
+# Precedence: built-in defaults < this file < environment variables.
+# The config file is read from $CONFIG_FILE or ./config.yaml (or ./config.yml).
+
+# --- Sessions (required) -----------------------------------------------------
+# Paste the value of the "__Host-hyperagent_session" cookie from a logged-in
+# browser (DevTools -> Application -> Cookies -> hyperagent.com). Add several to
+# rotate across accounts. You can also put tokens in sessions.txt (one per line).
+sessions:
+  - "PASTE_YOUR___Host-hyperagent_session_VALUE_HERE"
+  # - "second_account_token"
+# sessions_file: sessions.txt        # optional: one token per line, or a JSON array
+
+# --- Server ------------------------------------------------------------------
+host: 127.0.0.1
+port: 8000
+proxy_api_key: ""                    # if set, clients must send Authorization: Bearer <key>
+
+# --- Rotation ----------------------------------------------------------------
+rotate_by_balance: true              # prefer the account with the most remaining credit
+balance_refresh_seconds: 300         # how often to re-check balances
+
+# --- Behaviour ---------------------------------------------------------------
+low_latency_mode: true               # keep server-side tools/plan-mode off (fast + cheap)
+reasoning_style: reasoning_content   # reasoning_content | think_tags | both
+toolcall_mode: content               # content | openai | off
+enable_multimodal: true
+disable_server_mcp: true             # during client tool-calls, keep Hyperagent's own tools off
+
+# --- Sessions/threads --------------------------------------------------------
+session_persist: true                # persist session->thread map (SQLite)
+session_db_path: sessions.db
+
+# --- Logging -----------------------------------------------------------------
+log_level: INFO

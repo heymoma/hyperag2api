@@ -33,6 +33,36 @@ class TestLoadSessions(unittest.TestCase):
                 self.assertEqual(config.load_sessions(), ["tokX", "tokY"])
 
 
+class TestConfigFile(unittest.TestCase):
+    def test_file_values_used(self):
+        with patch.dict("os.environ", {"PORT": "", "LOW_LATENCY_MODE": "", "REASONING_STYLE": ""}, clear=False):
+            with patch.object(config, "_FILE", {"port": 9999, "low_latency_mode": False, "reasoning_style": "both"}):
+                self.assertEqual(config.env_int("PORT", 8000), 9999)
+                self.assertFalse(config.env_flag("LOW_LATENCY_MODE", True))
+                self.assertEqual(config.env_str("REASONING_STYLE", "reasoning_content"), "both")
+
+    def test_env_overrides_file(self):
+        with patch.dict("os.environ", {"PORT": "7000"}, clear=False):
+            with patch.object(config, "_FILE", {"port": 9999}):
+                self.assertEqual(config.env_int("PORT", 8000), 7000)
+
+    def test_sessions_from_config_file(self):
+        with patch.dict("os.environ", {"HYPERAGENT_SESSION": "", "HYPERAGENT_SESSIONS": ""}, clear=False):
+            with patch.object(config, "SESSIONS_FILE", ""), patch.object(config, "_FILE", {"sessions": ["fileTokA", "fileTokB"]}):
+                import os
+                if not os.path.exists("sessions.txt"):
+                    self.assertEqual(config.load_sessions(), ["fileTokA", "fileTokB"])
+
+
+class TestBalanceRotation(unittest.IsolatedAsyncioTestCase):
+    async def test_orders_by_remaining_balance(self):
+        async def bf(tok):
+            return {"a": 100.0, "b": 400.0, "c": 250.0}[tok]
+        p = StaticSessionCookieProvider(["a", "b", "c"], balance_fn=bf, rotate_by_balance=True, refresh_interval=0)
+        ck = await p.get_cookies()
+        self.assertEqual(ck["__Host-hyperagent_session"], "b")  # richest first
+
+
 class TestRotation(unittest.IsolatedAsyncioTestCase):
     async def test_create_thread_rotates_on_auth_error(self):
         from src.core.interfaces import AuthError

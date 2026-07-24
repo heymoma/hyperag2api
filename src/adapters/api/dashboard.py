@@ -45,6 +45,11 @@ DASHBOARD_HTML = r"""<!DOCTYPE html>
 
   <div class="cards" id="cards"></div>
 
+  <h2>Accounts &amp; balance</h2>
+  <table id="accounts"><thead><tr>
+    <th>Account</th><th>Status</th><th>Plan</th><th>Remaining</th><th>Used</th><th>Session</th>
+  </tr></thead><tbody><tr><td class="empty" colspan="6">loading…</td></tr></tbody></table>
+
   <h2>Active sessions → threads</h2>
   <table id="sessions"><thead><tr>
     <th>Session key</th><th>Thread</th><th>Model</th><th>Msgs</th><th>Idle</th><th>Age</th>
@@ -108,7 +113,33 @@ async function tick(){
     document.getElementById("statusText").textContent = "offline — "+e.message;
   }
 }
-tick(); setInterval(tick, 2000);
+async function tickAccounts(){
+  try {
+    const r = await fetch("/accounts", {cache:"no-store"});
+    if(!r.ok) return;
+    const d = await r.json();
+    const tb = document.querySelector("#accounts tbody");
+    const accs = d.accounts || [];
+    tb.innerHTML = accs.length ? accs.map(a => {
+      const b = a.balance || {};
+      const ok = a.valid ? `<span class="pill ok">valid</span>` : `<span class="pill err">invalid</span>`;
+      const rem = (b.credit_remaining_usd!=null) ? "$"+Number(b.credit_remaining_usd).toFixed(2) : "—";
+      const used = (b.credit_used_usd!=null) ? "$"+Number(b.credit_used_usd).toFixed(2) : "—";
+      return `<tr>
+        <td title="${a.email||""}">${a.email||a.name||"—"}</td>
+        <td>${ok}</td><td>${b.plan||"—"}</td>
+        <td><strong>${rem}</strong></td><td>${used}</td>
+        <td class="mono">${a.session||"—"}</td></tr>`;
+    }).join("") : `<tr><td class="empty" colspan="6">No sessions configured.</td></tr>`;
+    if(accs.length && d.total_remaining_usd!=null){
+      tb.innerHTML += `<tr><td colspan="3" style="color:#71717a">Total remaining${d.rotate_by_balance?" · balance rotation on":""}</td>`+
+                      `<td colspan="3"><strong>$${Number(d.total_remaining_usd).toFixed(2)}</strong></td></tr>`;
+    }
+  } catch(e){}
+}
+tick(); tickAccounts();
+setInterval(tick, 2000);
+setInterval(tickAccounts, 15000);
 </script>
 </body>
 </html>

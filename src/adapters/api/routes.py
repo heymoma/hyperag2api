@@ -20,25 +20,23 @@ from src.core.logging_config import get_logger
 logger = get_logger("api")
 
 
+async def _balance_fn(token: str):
+    """Injected into the session provider for balance-based rotation."""
+    bal = await accounts.get_balance(token)
+    return bal.get("credit_remaining_usd")
+
+
 def _build_cookie_provider():
-    """Pick the auth source: config-provided sessions (browserless) or the
-    browser over CDP. Playwright is imported lazily so a browserless install
-    (no Playwright) works fine in config mode."""
+    """Build the browserless session provider from config."""
     sessions = config.load_sessions()
-    mode = config.SESSION_MODE
-    if mode != "browser" and (mode == "config" or sessions):
-        if not sessions:
-            logger.error("SESSION_MODE=config but no sessions configured.")
-        return StaticSessionCookieProvider(sessions)
-    try:
-        from src.adapters.browser.playwright_cdp import PlaywrightCDPCookieProvider
-        return PlaywrightCDPCookieProvider()
-    except Exception as exc:  # pragma: no cover - only when playwright missing
-        logger.error(
-            "Browser (Playwright) provider unavailable: %s. Configure "
-            "HYPERAGENT_SESSION to run browserless.", exc,
-        )
-        return StaticSessionCookieProvider([])
+    if not sessions:
+        logger.warning("No sessions configured — add them to config.yaml or set HYPERAGENT_SESSION.")
+    return StaticSessionCookieProvider(
+        sessions,
+        balance_fn=_balance_fn,
+        rotate_by_balance=config.ROTATE_BY_BALANCE,
+        refresh_interval=config.BALANCE_REFRESH_SECONDS,
+    )
 
 
 # Initialize services
@@ -53,10 +51,13 @@ app = FastAPI(title="Hyperagent Local API Proxy")
 async def _verify_configured_sessions():
     sessions = config.load_sessions()
     if not sessions:
+        logger.warning("No sessions configured — add 'sessions:' to config.yaml or set HYPERAGENT_SESSION.")
         return
-    for info in await accounts.verify_all(sessions):
+    for info in await accounts.summaries(sessions):
         if info.get("valid"):
-            logger.info("Session %s OK — %s <%s>", info["session"], info.get("name"), info.get("email"))
+            bal = info.get("balance") or {}
+            logger.info("Session %s OK — %s <%s> — remaining $%s", info["session"],
+                        info.get("name"), info.get("email"), bal.get("credit_remaining_usd"))
         else:
             logger.warning("Session %s INVALID (%s)", info.get("session"),
                            info.get("status") or info.get("error"))
@@ -121,37 +122,30 @@ async def root():
 
 @app.get("/health")
 async def health():
-    """Readiness probe: reports uptime and browser/cookie reachability."""
-    browser_ok = False
-    cookies_ok = False
+    """Readiness probe: sessions configured + current account reachability."""
+    sessions = config.load_sessions()
+    session_ok = False
     detail = ""
+    account = None
     try:
         cookies = await cookie_provider.get_cookies()
-        browser_ok = True
-        cookies_ok = bool(cookies)
-        if not cookies_ok:
-            detail = "Connected to browser but no Hyperagent cookies (not logged in?)."
+        token = cookies.get(COOKIE_NAME, "")
+        if token:
+            info = await accounts.verify_session(token)
+            session_ok = bool(info.get("valid"))
+            if session_ok:
+                account = {"email": info.get("email"), "name": info.get("name")}
+            else:
+                detail = f"Session invalid ({info.get('status') or info.get('error')})."
     except Exception as exc:
         detail = str(exc)
-    account = None
-    if cookies_ok:
-        try:
-            token = cookies.get(COOKIE_NAME, "")
-            if token:
-                info = await accounts.verify_session(token)
-                if info.get("valid"):
-                    account = {"email": info.get("email"), "name": info.get("name")}
-        except Exception:
-            pass
-    status = "ok" if (browser_ok and cookies_ok) else "degraded"
-    code = 200 if status == "ok" else 503
+    status = "ok" if session_ok else "degraded"
     return JSONResponse(
-        status_code=code,
+        status_code=200 if status == "ok" else 503,
         content={
             "status": status,
-            "auth_mode": config.SESSION_MODE,
-            "browser_connected": browser_ok,
-            "cookies_present": cookies_ok,
+            "sessions_configured": len(sessions),
+            "session_valid": session_ok,
             "account": account,
             "detail": detail,
             **STATS.summary(),
@@ -161,20 +155,20 @@ async def health():
 
 @app.get("/accounts")
 async def accounts_endpoint(dependencies=Depends(verify_api_key)):
-    """Verify configured session(s) and show which account each belongs to."""
+    """Verify configured session(s) and show account + remaining balance for each."""
     sessions = config.load_sessions()
-    if sessions:
-        infos = await accounts.summaries(sessions)
-        return {"mode": config.SESSION_MODE, "count": len(infos),
-                "accounts": infos, "balance_note": accounts.BALANCE_NOTE}
-    # Browser mode: verify whatever the live session yields.
-    try:
-        cookies = await cookie_provider.get_cookies()
-        token = cookies.get(COOKIE_NAME, "")
-        info = await accounts.account_summary(token) if token else {"valid": False, "error": "no session cookie"}
-    except Exception as exc:
-        info = {"valid": False, "error": str(exc)[:120]}
-    return {"mode": "browser", "count": 1, "accounts": [info], "balance_note": accounts.BALANCE_NOTE}
+    infos = await accounts.summaries(sessions)
+    total_remaining = sum(
+        (a.get("balance", {}) or {}).get("credit_remaining_usd") or 0
+        for a in infos if a.get("valid")
+    )
+    return {
+        "count": len(infos),
+        "accounts": infos,
+        "total_remaining_usd": round(total_remaining, 2),
+        "rotate_by_balance": config.ROTATE_BY_BALANCE,
+        "balance_note": accounts.BALANCE_NOTE,
+    }
 
 
 @app.get("/v1/models")

@@ -1,5 +1,10 @@
 # Local credentials and environments
 .env
+# Config & sessions hold secrets — never commit them
+config.yaml
+config.yml
+sessions.txt
+sessions.db
 
 # Python build/cache
 __pycache__/

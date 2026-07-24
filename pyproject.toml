@@ -4,19 +4,19 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "hyperag2api"
-version = "1.7.0"
-description = "OpenAI-compatible local proxy server for Hyperagent.com"
+version = "2.0.0"
+description = "OpenAI-compatible, browserless local proxy server for Hyperagent.com"
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
-authors = [{ name = "Hyperagent Local Proxy contributors" }]
-keywords = ["hyperagent", "openai", "proxy", "llm", "opencode", "cdp"]
+authors = [{ name = "hyperag2api contributors" }]
+keywords = ["hyperagent", "openai", "proxy", "llm", "opencode", "mcp"]
 dependencies = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",
     "httpx>=0.27",
-    "playwright>=1.44",
     "pydantic>=2.6",
+    "PyYAML>=6.0",
 ]
 
 [project.urls]

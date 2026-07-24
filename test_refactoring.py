@@ -190,19 +190,6 @@ class TestChatServiceAsync(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.choices[0].message.reasoning_content, "Thought process")
 
 
-class TestAuthService(unittest.TestCase):
-    def test_reset_authentication(self):
-        from src.services.auth_service import AuthService
-        mock_cookie_provider = MagicMock()
-        mock_cookie_provider.clear_cookies.return_value = True
-        
-        auth_service = AuthService(mock_cookie_provider)
-        res = auth_service.reset_authentication()
-        
-        self.assertTrue(res)
-        mock_cookie_provider.clear_cookies.assert_called_once()
-
-
 if __name__ == "__main__":
     unittest.main()
 
