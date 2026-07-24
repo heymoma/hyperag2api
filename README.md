@@ -232,6 +232,8 @@ python3 -m unittest discover -p "test_*.py" -v
 
 ### 2️⃣ Add the provider
 
+Each model needs `"attachment": true` (so OpenCode will send images/files), `"tool_call": true` (MCP / function calling), and `"reasoning": true`. A model **without `attachment: true`** produces *"this model does not support image input"* when you paste a screenshot.
+
 ```json
 "provider": {
   "hyperag2api": {
@@ -242,12 +244,12 @@ python3 -m unittest discover -p "test_*.py" -v
       "apiKey": "<YOUR_API_KEY>"
     },
     "models": {
-      "opus-latest": { "name": "Claude Opus 4.8" },
-      "sonnet-5": { "name": "Claude Sonnet 5" },
-      "gpt-5.6-sol": { "name": "GPT 5.6 Sol" },
-      "gemini-3.5-flash": { "name": "Gemini 3.5 Flash" },
-      "deepseek-v4-pro": { "name": "DeepSeek V4 Pro" },
-      "grok-4.5": { "name": "Grok 4.5" }
+      "opus-latest":      { "name": "Claude Opus 4.8", "attachment": true, "tool_call": true, "reasoning": true },
+      "sonnet-5":         { "name": "Claude Sonnet 5", "attachment": true, "tool_call": true, "reasoning": true },
+      "gpt-5.6-sol":      { "name": "GPT 5.6 Sol",     "attachment": true, "tool_call": true, "reasoning": true },
+      "gemini-3.5-flash": { "name": "Gemini 3.5 Flash","attachment": true, "tool_call": true },
+      "deepseek-v4-pro":  { "name": "DeepSeek V4 Pro",  "attachment": true, "tool_call": true },
+      "grok-4.5":         { "name": "Grok 4.5",         "attachment": true, "tool_call": true }
     }
   }
 }
@@ -256,6 +258,7 @@ python3 -m unittest discover -p "test_*.py" -v
 > [!IMPORTANT]
 > - Replace `<PORT>` with your configured port (default `8000`).
 > - Replace `<YOUR_API_KEY>` with your enforced key (or any string if key enforcement is disabled).
+> - **Images not working?** Make sure the model has `"attachment": true` — that's OpenCode's per-model gate for image/file input; the proxy handles the upload once OpenCode actually sends it.
 
 ### 3️⃣ Use it
 Select the models from the OpenCode dropdown, or reference them as `hyperag2api/opus-latest`, `hyperag2api/gpt-5.6-sol`, etc.

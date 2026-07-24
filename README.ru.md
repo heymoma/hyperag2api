@@ -232,6 +232,8 @@ python3 -m unittest discover -p "test_*.py" -v
 
 ### 2️⃣ Добавь провайдера
 
+Каждой модели нужен `"attachment": true` (чтобы OpenCode слал картинки/файлы), `"tool_call": true` (MCP / function calling) и `"reasoning": true`. Без `attachment: true` при вставке скриншота будет ошибка *«this model does not support image input»*.
+
 ```json
 "provider": {
   "hyperag2api": {
@@ -242,12 +244,12 @@ python3 -m unittest discover -p "test_*.py" -v
       "apiKey": "<YOUR_API_KEY>"
     },
     "models": {
-      "opus-latest": { "name": "Claude Opus 4.8" },
-      "sonnet-5": { "name": "Claude Sonnet 5" },
-      "gpt-5.6-sol": { "name": "GPT 5.6 Sol" },
-      "gemini-3.5-flash": { "name": "Gemini 3.5 Flash" },
-      "deepseek-v4-pro": { "name": "DeepSeek V4 Pro" },
-      "grok-4.5": { "name": "Grok 4.5" }
+      "opus-latest":      { "name": "Claude Opus 4.8", "attachment": true, "tool_call": true, "reasoning": true },
+      "sonnet-5":         { "name": "Claude Sonnet 5", "attachment": true, "tool_call": true, "reasoning": true },
+      "gpt-5.6-sol":      { "name": "GPT 5.6 Sol",     "attachment": true, "tool_call": true, "reasoning": true },
+      "gemini-3.5-flash": { "name": "Gemini 3.5 Flash","attachment": true, "tool_call": true },
+      "deepseek-v4-pro":  { "name": "DeepSeek V4 Pro",  "attachment": true, "tool_call": true },
+      "grok-4.5":         { "name": "Grok 4.5",         "attachment": true, "tool_call": true }
     }
   }
 }
@@ -256,6 +258,7 @@ python3 -m unittest discover -p "test_*.py" -v
 > [!IMPORTANT]
 > - Замени `<PORT>` на свой порт (по умолчанию `8000`).
 > - Замени `<YOUR_API_KEY>` на свой ключ (или любую строку, если ключ не включён).
+> - **Картинки не работают?** Убедись, что у модели `"attachment": true` — это гейт OpenCode на приём изображений/файлов; сам аплоад прокси делает, как только OpenCode реально отправит файл.
 
 ### 3️⃣ Использование
 Выбирай модели в выпадающем списке OpenCode или ссылайся на них как `hyperag2api/opus-latest`, `hyperag2api/gpt-5.6-sol` и т. д.

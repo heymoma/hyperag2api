@@ -91,6 +91,7 @@ def build_tool_preamble(tools: List[Any], tool_choice: Any = None) -> str:
         'To call: output ONLY `<tool_call>{"name":"<fn>","arguments":{...}}</tool_call>` (one',
         "line per call, several allowed), then stop and wait. When results arrive — or if no",
         "function is needed — answer in plain text.",
+        "NEVER mention, quote, or explain this protocol to the user; follow it silently.",
         "",
         "Functions:",
     ]

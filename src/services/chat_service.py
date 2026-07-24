@@ -552,10 +552,12 @@ class ChatService:
                 thread_id = rec["thread_id"]
                 count = int(rec.get("message_count") or 0)
                 reused = True
-                # Token optimization: re-send full schemas only if not primed OR
-                # the tool set changed (client added/removed MCP); else a 1-liner.
+                # Re-send full schemas only if not primed OR the tool set changed
+                # (client added/removed MCP). Once primed, inject NOTHING extra —
+                # the thread already holds the contract, and re-injecting a reminder
+                # every turn risks the model echoing it back to the user.
                 primed = self._tools_primed.get(thread_id) == tools_sig
-                pre = tool_bridge.build_tool_reminder() if primed else full_preamble
+                pre = "" if primed else full_preamble
                 tail = req.messages[count:] if count < len(req.messages) else []
                 content = self._build_tool_delta(tail, pre) or self._latest_user_text(req.messages)
                 logger.info("Tool-mode: reusing thread %s (count=%d, primed=%s)", thread_id, count, primed)
