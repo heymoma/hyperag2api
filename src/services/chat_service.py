@@ -553,10 +553,25 @@ class ChatService:
             streamed: List[str] = []
             tool_region = ""
             in_tool = False
-            async for data in self.chat_backend.stream_chat(
+            _src = self.chat_backend.stream_chat(
                 thread_id, content, cookies, session_id=explicit,
                 attachments=attachments, feature_flags=tool_flags,
-            ):
+            )
+            _ait = _src.__aiter__()
+            _ka = config.KEEPALIVE_INTERVAL
+            while True:
+                # Heartbeat during long/cold waits so big cold-starts don't time out the client.
+                try:
+                    if _ka and _ka > 0:
+                        try:
+                            data = await asyncio.wait_for(_ait.__anext__(), timeout=_ka)
+                        except asyncio.TimeoutError:
+                            yield sse_comment("keepalive")
+                            continue
+                    else:
+                        data = await _ait.__anext__()
+                except StopAsyncIteration:
+                    break
                 if not isinstance(data, dict):
                     continue
                 dtype = str(data.get("type", ""))

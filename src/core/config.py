@@ -133,6 +133,13 @@ ENABLE_USAGE = env_flag("ENABLE_USAGE", True)
 
 SEARCH_MODE = env_str("SEARCH_MODE", "exa")
 
+# Low-latency / lean mode: keep the server agent from doing slow (and costly)
+# work — force every server-side capability + plan mode OFF for ALL requests
+# unless explicitly turned off. Measured: heavy server tools add seconds per
+# request. To use Hyperagent's own server-side tools, set LOW_LATENCY_MODE=0
+# and enable the specific ENABLE_* flags you want.
+LOW_LATENCY_MODE = env_flag("LOW_LATENCY_MODE", True)
+
 
 # --------------------------------------------------------------------------- #
 # Default network headers                                                      #
@@ -181,7 +188,13 @@ _CHAT_FLAG_ENV = {
 
 
 def get_chat_feature_flags() -> Dict[str, Any]:
-    """Build the capability-flag portion of the /chat payload from the env."""
+    """Build the capability-flag portion of the /chat payload from the env.
+
+    In LOW_LATENCY_MODE (default) every server-side capability and plan mode are
+    forced off for the leanest, fastest (and cheapest) agent response.
+    """
+    if LOW_LATENCY_MODE:
+        return server_tools_off_flags()
     flags: Dict[str, Any] = {key: env_flag(env_name, False) for key, env_name in _CHAT_FLAG_ENV.items()}
     flags["searchMode"] = SEARCH_MODE
     flags["integrationMode"] = env_str("INTEGRATION_MODE", "open")

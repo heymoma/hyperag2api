@@ -128,6 +128,7 @@ You can also pin a thread inline via the model id using an `@suffix`, e.g. `hype
 | `TOOLCALL_MODE` | `content` | Surface backend tool activity: `content`, `openai` (real `tool_calls`), or `off`. |
 | `ENABLE_MULTIMODAL` | `1` | Upload & attach `image_url` content parts. |
 | `DISABLE_SERVER_MCP` | `1` | During client tool-calling turns, force Hyperagent's own tools/MCP off so the server agent delegates to your client. |
+| `LOW_LATENCY_MODE` | `1` | Force every server capability + plan mode off for **all** requests — leanest, fastest, cheapest response. Set `0` to allow server-side tools in plain chat. |
 | `ENABLE_USAGE` | `1` | Include approximate token `usage` in responses. |
 | `KEEPALIVE_INTERVAL` | `15` | Seconds of silence before an SSE keepalive comment (`0` disables). |
 | `SEARCH_MODE` | `exa` | Search mode sent in the chat payload. |
@@ -188,6 +189,28 @@ It engages automatically whenever a request carries `tools` (no config needed). 
 - This is a **prompt-level bridge**, not native function calling — reliable for the common single/parallel-call loop, but not guaranteed for every edge case. The primary call format is `<tool_call>{…}</tool_call>`; fenced ```tool_call``` / ```json``` blocks are also parsed as a fallback.
 - The functions run **on your client side** (your MCP), not on Hyperagent — so **any** client MCP (Figma, filesystem, GitHub, …) works; the proxy is tool-agnostic.
 - Many tools = a larger one-time preamble; for big tool sets and long loops, pin the conversation with `X-Session-Id` (or `model@session`) for rock-solid reuse.
+
+---
+
+## ⚡ Latency — what to expect
+
+Response time is dominated by **Hyperagent's backend**, not the proxy. Each thread runs in a cloud sandbox that is provisioned on demand. Measured against the live API:
+
+| State | Time to first token |
+| :--- | :--- |
+| **Cold** (new thread / new conversation) | ~10 s (sandbox provisions in ~3.7 s, then the agent runs) |
+| **Hot** (sandbox already up, follow-up message) | **~0.1 s** |
+| After **~40 s idle** | cold again — the sandbox is torn down |
+
+Two honest takeaways:
+
+- **During active back-and-forth it's fast.** The proxy reuses one thread per conversation, so while messages are less than ~40 s apart the sandbox stays hot and replies are near-instant. The big latencies you see are **cold starts** — the first message of a conversation, or a message after an idle gap (occasionally 40–80 s under backend load).
+- **There is no free keep-alive.** We tested pinging the `warm` endpoint on an interval — it does **not** keep the sandbox hot (only real activity does). So the proxy doesn't ship a fake keep-alive; a true one would cost a model run per ping and pollute your thread, which isn't worth it.
+
+What the proxy does do to help:
+- **Thread reuse** keeps the sandbox hot throughout an active session.
+- **`LOW_LATENCY_MODE`** (default on) forces server-side tools + plan mode off so the agent returns the fastest, cheapest possible answer.
+- **SSE heartbeats** during long waits keep the connection alive so a 40–80 s cold start doesn't trip your client's timeout.
 
 ---
 

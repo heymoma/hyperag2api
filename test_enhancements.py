@@ -258,6 +258,17 @@ class TestToolBridge(unittest.TestCase):
         self.assertFalse(flags["enableBrowser"])
         self.assertFalse(flags["injectPlanMode"])
 
+    def test_low_latency_mode_forces_lean(self):
+        orig = config.LOW_LATENCY_MODE
+        try:
+            config.LOW_LATENCY_MODE = True
+            flags = config.get_chat_feature_flags()
+            self.assertFalse(flags["enableWebSearch"])
+            self.assertFalse(flags["enableBrowser"])
+            self.assertFalse(flags["injectPlanMode"])
+        finally:
+            config.LOW_LATENCY_MODE = orig
+
     def test_sentinel_holdback(self):
         from src.services import tool_bridge
         # a trailing partial sentinel must be held back
