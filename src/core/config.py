@@ -10,7 +10,7 @@ settings are grouped into a small :class:`Settings` snapshot plus a few helpers.
 from __future__ import annotations
 
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 
 # --------------------------------------------------------------------------- #
@@ -59,6 +59,8 @@ HYPERAGENT_THREADS_API = f"{HYPERAGENT_BASE_URL}/api/threads"
 HYPERAGENT_CHAT_API_TEMPLATE = f"{HYPERAGENT_BASE_URL}/api/threads/{{thread_id}}/chat"
 HYPERAGENT_WARM_API_TEMPLATE = f"{HYPERAGENT_BASE_URL}/api/threads/{{thread_id}}/warm"
 HYPERAGENT_INTERRUPT_API_TEMPLATE = f"{HYPERAGENT_BASE_URL}/api/threads/{{thread_id}}/interrupt"
+# Verified live: returns the account (userId, email, name, ...) for a valid session.
+HYPERAGENT_AUTH_ME_API = f"{HYPERAGENT_BASE_URL}/api/auth/me"
 # Attachment upload (verified live): POST JSON {filename, mimeType, size, content(base64)}
 # -> {success, fileId, url, ...}. The thread-scoped attachments route takes
 # {files:[{name, size, mimeType, base64}]} and binds the file to the thread.
@@ -257,6 +259,55 @@ DEFAULT_MODEL = env_str("DEFAULT_MODEL", "opus-latest")
 
 # Character used to pin a named session inside the model id, e.g. "opus-4.8@proj".
 SESSION_SUFFIX_SEP = "@"
+
+
+# --------------------------------------------------------------------------- #
+# Auth source — browser (CDP) vs config-provided session token(s)             #
+# --------------------------------------------------------------------------- #
+# auto   : use config sessions if any are set, else drive the browser over CDP
+# config : always use config sessions (no browser / Playwright needed)
+# browser: always capture cookies from the running browser over CDP
+SESSION_MODE = env_str("SESSION_MODE", "auto").strip().lower()
+SESSIONS_FILE = env_str("SESSIONS_FILE", "")
+
+
+def load_sessions() -> List[str]:
+    """Collect Hyperagent session token(s) from env and/or a file.
+
+    Sources (all merged, de-duplicated, order preserved):
+    - HYPERAGENT_SESSION       — a single ``__Host-hyperagent_session`` value
+    - HYPERAGENT_SESSIONS      — comma-separated values (multiple accounts)
+    - SESSIONS_FILE            — a file with one token per line, or a JSON array
+    """
+    tokens: List[str] = []
+    single = os.environ.get("HYPERAGENT_SESSION", "").strip()
+    if single:
+        tokens.append(single)
+    for t in os.environ.get("HYPERAGENT_SESSIONS", "").split(","):
+        t = t.strip()
+        if t:
+            tokens.append(t)
+    if SESSIONS_FILE and os.path.exists(SESSIONS_FILE):
+        try:
+            raw = open(SESSIONS_FILE, encoding="utf-8").read().strip()
+            if raw.startswith("["):
+                import json as _json
+                for t in _json.loads(raw):
+                    if isinstance(t, str) and t.strip():
+                        tokens.append(t.strip())
+            else:
+                for line in raw.splitlines():
+                    line = line.strip()
+                    if line and not line.startswith("#"):
+                        tokens.append(line)
+        except Exception:  # pragma: no cover - defensive
+            pass
+    seen, out = set(), []
+    for t in tokens:
+        if t not in seen:
+            seen.add(t)
+            out.append(t)
+    return out
 
 
 def resolve_model(model: str) -> "tuple[str, Optional[str]]":

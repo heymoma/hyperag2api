@@ -151,7 +151,8 @@ You can also pin a thread inline via the model id using an `@suffix`, e.g. `hype
 | :--- | :--- |
 | `/v1/chat/completions` | OpenAI-compatible chat (streaming & non-streaming). |
 | `/v1/models` | Model list. |
-| `/health` | Readiness: browser connectivity + login state. |
+| `/health` | Readiness: auth mode, connectivity, login state, account. |
+| `/accounts` | Verify configured session(s) and show the account each belongs to. |
 | `/dashboard` | Live read-only monitoring UI. |
 | `/api/stats` | JSON stats (sessions, recent requests, counters). |
 
@@ -189,6 +190,45 @@ It engages automatically whenever a request carries `tools` (no config needed). 
 - This is a **prompt-level bridge**, not native function calling — reliable for the common single/parallel-call loop, but not guaranteed for every edge case. The primary call format is `<tool_call>{…}</tool_call>`; fenced ```tool_call``` / ```json``` blocks are also parsed as a fallback.
 - The functions run **on your client side** (your MCP), not on Hyperagent — so **any** client MCP (Figma, filesystem, GitHub, …) works; the proxy is tool-agnostic.
 - Many tools = a larger one-time preamble; for big tool sets and long loops, pin the conversation with `X-Session-Id` (or `model@session`) for rock-solid reuse.
+
+---
+
+## 🔑 Browserless mode (config sessions)
+
+Don't want to run a browser? Provide your Hyperagent session token directly and the proxy skips Playwright/CDP entirely — great for servers and headless setups.
+
+Grab the value of the **`__Host-hyperagent_session`** cookie from your logged-in browser (DevTools → Application → Cookies → `hyperagent.com`), then:
+
+```bash
+# single account
+HYPERAGENT_SESSION="<cookie value>" python3 proxy_server.py
+
+# multiple accounts (rotated on auth failure)
+HYPERAGENT_SESSIONS="tokenA,tokenB" python3 proxy_server.py
+
+# or from a file (one token per line, or a JSON array)
+SESSIONS_FILE=~/.hyperagent-sessions python3 proxy_server.py
+```
+
+| Variable | Default | Description |
+| :--- | :--- | :--- |
+| `SESSION_MODE` | `auto` | `auto` (config if set, else browser), `config` (never touch a browser), or `browser`. |
+| `HYPERAGENT_SESSION` | *(unset)* | A single `__Host-hyperagent_session` value. |
+| `HYPERAGENT_SESSIONS` | *(unset)* | Comma-separated values (multiple accounts). |
+| `SESSIONS_FILE` | *(unset)* | Path to a file with one token per line, or a JSON array. |
+
+The proxy **verifies each session on startup** (via `/api/auth/me`) and logs which account it belongs to. Check anytime:
+
+```bash
+curl -s localhost:<PORT>/accounts | jq
+# → {"mode":"config","accounts":[{"valid":true,"email":"you@example.com","name":"...","session":"…6fb8"}], ...}
+```
+
+Tokens are never logged in full — only a `…last4` fingerprint. Treat the session value like a password.
+
+> **Balance/credits:** not shown, because Hyperagent doesn't expose them via a public API endpoint (verified). `/accounts` confirms the session works and whose account it is; for balance, use your Hyperagent billing page.
+
+> **Playwright is now optional** — only needed for `browser` mode. In config mode the proxy runs without it.
 
 ---
 

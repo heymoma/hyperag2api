@@ -5,24 +5,61 @@ from typing import Optional
 from fastapi import FastAPI, HTTPException, Header, Depends
 from fastapi.responses import StreamingResponse, HTMLResponse, JSONResponse
 
+from src.core import config
 from src.core.config import PROXY_API_KEY, SESSION_HEADER
 from src.core.models import estimate_tokens
 from src.core.stats import STATS
 from src.adapters.api.schemas import ChatCompletionRequest
 from src.adapters.api.dashboard import DASHBOARD_HTML
-from src.adapters.browser.playwright_cdp import PlaywrightCDPCookieProvider
+from src.adapters.session.config_provider import StaticSessionCookieProvider, COOKIE_NAME
 from src.adapters.backend.hyperagent_client import HyperagentClient
 from src.services.chat_service import ChatService
+from src.services import accounts
 from src.core.logging_config import get_logger
 
 logger = get_logger("api")
 
+
+def _build_cookie_provider():
+    """Pick the auth source: config-provided sessions (browserless) or the
+    browser over CDP. Playwright is imported lazily so a browserless install
+    (no Playwright) works fine in config mode."""
+    sessions = config.load_sessions()
+    mode = config.SESSION_MODE
+    if mode != "browser" and (mode == "config" or sessions):
+        if not sessions:
+            logger.error("SESSION_MODE=config but no sessions configured.")
+        return StaticSessionCookieProvider(sessions)
+    try:
+        from src.adapters.browser.playwright_cdp import PlaywrightCDPCookieProvider
+        return PlaywrightCDPCookieProvider()
+    except Exception as exc:  # pragma: no cover - only when playwright missing
+        logger.error(
+            "Browser (Playwright) provider unavailable: %s. Configure "
+            "HYPERAGENT_SESSION to run browserless.", exc,
+        )
+        return StaticSessionCookieProvider([])
+
+
 # Initialize services
-cookie_provider = PlaywrightCDPCookieProvider()
+cookie_provider = _build_cookie_provider()
 chat_backend = HyperagentClient()
 chat_service = ChatService(cookie_provider, chat_backend)
 
 app = FastAPI(title="Hyperagent Local API Proxy")
+
+
+@app.on_event("startup")
+async def _verify_configured_sessions():
+    sessions = config.load_sessions()
+    if not sessions:
+        return
+    for info in await accounts.verify_all(sessions):
+        if info.get("valid"):
+            logger.info("Session %s OK — %s <%s>", info["session"], info.get("name"), info.get("email"))
+        else:
+            logger.warning("Session %s INVALID (%s)", info.get("session"),
+                           info.get("status") or info.get("error"))
 
 
 async def verify_api_key(authorization: Optional[str] = Header(None)):
@@ -96,18 +133,48 @@ async def health():
             detail = "Connected to browser but no Hyperagent cookies (not logged in?)."
     except Exception as exc:
         detail = str(exc)
+    account = None
+    if cookies_ok:
+        try:
+            token = cookies.get(COOKIE_NAME, "")
+            if token:
+                info = await accounts.verify_session(token)
+                if info.get("valid"):
+                    account = {"email": info.get("email"), "name": info.get("name")}
+        except Exception:
+            pass
     status = "ok" if (browser_ok and cookies_ok) else "degraded"
     code = 200 if status == "ok" else 503
     return JSONResponse(
         status_code=code,
         content={
             "status": status,
+            "auth_mode": config.SESSION_MODE,
             "browser_connected": browser_ok,
             "cookies_present": cookies_ok,
+            "account": account,
             "detail": detail,
             **STATS.summary(),
         },
     )
+
+
+@app.get("/accounts")
+async def accounts_endpoint(dependencies=Depends(verify_api_key)):
+    """Verify configured session(s) and show which account each belongs to."""
+    sessions = config.load_sessions()
+    if sessions:
+        infos = await accounts.verify_all(sessions)
+        return {"mode": config.SESSION_MODE, "count": len(infos),
+                "accounts": infos, "balance_note": accounts.BALANCE_NOTE}
+    # Browser mode: verify whatever the live session yields.
+    try:
+        cookies = await cookie_provider.get_cookies()
+        token = cookies.get(COOKIE_NAME, "")
+        info = await accounts.verify_session(token) if token else {"valid": False, "error": "no session cookie"}
+    except Exception as exc:
+        info = {"valid": False, "error": str(exc)[:120]}
+    return {"mode": "browser", "count": 1, "accounts": [info], "balance_note": accounts.BALANCE_NOTE}
 
 
 @app.get("/v1/models")
