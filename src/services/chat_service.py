@@ -22,7 +22,7 @@ from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 
 import httpx
 
-from src.core.interfaces import CookieProvider, ChatBackend
+from src.core.interfaces import CookieProvider, ChatBackend, AuthError
 from src.core import config
 from src.core.config import MODEL_MAPPING, resolve_model
 from src.core.models import format_openai_chunk, sse_comment, build_usage, DONE
@@ -64,6 +64,35 @@ class ChatService:
     # ------------------------------------------------------------------ #
     def get_available_models(self) -> List[Dict[str, str]]:
         return [{"id": k, "object": "model", "owned_by": "hyperagent"} for k in MODEL_MAPPING.keys()]
+
+    # ------------------------------------------------------------------ #
+    # Account rotation                                                    #
+    # ------------------------------------------------------------------ #
+    def _session_count(self) -> int:
+        fn = getattr(self.cookie_provider, "count", None)
+        try:
+            return max(1, fn()) if callable(fn) else 1
+        except Exception:
+            return 1
+
+    async def _create_thread_rotating(self, model, system_prompt, explicit, cookies):
+        """Create a thread; on an auth failure rotate to the next configured
+        account and retry. Returns (thread_id, cookies_used)."""
+        attempts = self._session_count()
+        last: Optional[Exception] = None
+        for i in range(attempts):
+            try:
+                tid = await self.chat_backend.create_thread(model, system_prompt, cookies, session_id=explicit)
+                return tid, cookies
+            except AuthError as exc:
+                last = exc
+                if i < attempts - 1:
+                    logger.warning("Session auth failed; rotating account (%d/%d).", i + 1, attempts)
+                    self.cookie_provider.invalidate()
+                    cookies = await self.cookie_provider.get_cookies()
+                else:
+                    raise
+        raise last if last else RuntimeError("thread creation failed")
 
     # ------------------------------------------------------------------ #
     # Prompt helpers                                                      #
@@ -274,8 +303,8 @@ class ChatService:
                 system_prompt, combined_prompt = self._prepare_prompts(req.messages)
                 pairs = self._dialog_pairs(req.messages)
                 first_turn = len(pairs) <= 1
-                thread_id = await self.chat_backend.create_thread(
-                    mapped_model, system_prompt, cookies, session_id=explicit
+                thread_id, cookies = await self._create_thread_rotating(
+                    mapped_model, system_prompt, explicit, cookies
                 )
                 await self.chat_backend.warm_thread(thread_id, cookies)
                 # First turn (or explicit session with no history) → send just the
@@ -528,8 +557,8 @@ class ChatService:
                 content = self._build_tool_delta(tail, pre) or self._latest_user_text(req.messages)
                 logger.info("Tool-mode: reusing thread %s (count=%d, primed=%s)", thread_id, count, primed)
             else:
-                thread_id = await self.chat_backend.create_thread(
-                    mapped_model, system_prompt, cookies, session_id=explicit
+                thread_id, cookies = await self._create_thread_rotating(
+                    mapped_model, system_prompt, explicit, cookies
                 )
                 await self.chat_backend.warm_thread(thread_id, cookies)
                 reused = False

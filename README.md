@@ -23,7 +23,9 @@
 - 🛡️ **Stability** — short-TTL cookie caching over a single CDP connection, automatic re-auth on 401/403, split connect/stream timeouts, exponential-backoff retries, resilient SSE parsing, and SSE keepalive heartbeats so long generations don't time out.
 - 🔧 **Tool-call passthrough** — backend tool activity can surface as OpenAI `tool_calls` deltas (`TOOLCALL_MODE`).
 - 🔌 **Client-side tool calling (MCP / functions)** — bridges the OpenAI function-calling loop over Hyperagent's text agent, so clients like **OpenCode** can use their **own** MCP servers/functions through the proxy. Accepts `tools`, makes the model emit `tool_calls` with `finish_reason: "tool_calls"`, and feeds your `role:"tool"` results back into the same thread. Verified live.
-- 🖼️ **Multimodal input** — `image_url` content parts are uploaded via `/api/files/upload` and bound to the thread via `/api/threads/{id}/attachments`.
+- 🖼️ **Multimodal input** — `image_url` parts are uploaded via Hyperagent's real presigned flow (`POST /api/uploads` → S3 `PUT` with `If-None-Match: *`) and referenced as `attachmentIds` (verified end-to-end: the model correctly describes uploaded images).
+- 🔁 **Account rotation** — supply multiple sessions; the proxy rotates to the next account on a 401/403.
+- 💳 **Account & balance** — `/accounts` verifies each session and shows the account + pay-as-you-go credit (initial / used / remaining).
 - 📊 **Live dashboard** — a read-only monitor at `/dashboard` (plus JSON at `/api/stats`) showing active sessions, recent requests, latency, tokens, and browser/cookie health.
 - ❤️ **Health probe** — `/health` reports browser connectivity and login state.
 
@@ -221,12 +223,19 @@ The proxy **verifies each session on startup** (via `/api/auth/me`) and logs whi
 
 ```bash
 curl -s localhost:<PORT>/accounts | jq
-# → {"mode":"config","accounts":[{"valid":true,"email":"you@example.com","name":"...","session":"…6fb8"}], ...}
+# → {"mode":"config","count":1,"accounts":[{
+#      "valid":true,"email":"you@example.com","name":"...","session":"…6fb8",
+#      "balance":{"plan":"Pay As You Go","credit_initial_usd":500,
+#                 "credit_used_usd":178.28,"credit_remaining_usd":321.72}}], ...}
 ```
 
 Tokens are never logged in full — only a `…last4` fingerprint. Treat the session value like a password.
 
-> **Balance/credits:** not shown, because Hyperagent doesn't expose them via a public API endpoint (verified). `/accounts` confirms the session works and whose account it is; for balance, use your Hyperagent billing page.
+**Multiple accounts & rotation.** Provide several tokens (`HYPERAGENT_SESSIONS=a,b,c`, a `.txt` file, or a JSON array). If a session returns 401/403 while creating a thread, the proxy automatically **rotates to the next account**.
+
+**`.txt` file.** Point `SESSIONS_FILE` at a file (one token per line; `#` comments allowed), or just drop a `sessions.txt` in the working directory and it's picked up automatically.
+
+> **Balance is shown** — pulled live from `/api/settings/billing/*`: plan, initial credit, used, and remaining. (Figures are Hyperagent's own pay-as-you-go credit; the proxy adds nothing to them.)
 
 > **Playwright is now optional** — only needed for `browser` mode. In config mode the proxy runs without it.
 

@@ -61,6 +61,13 @@ HYPERAGENT_WARM_API_TEMPLATE = f"{HYPERAGENT_BASE_URL}/api/threads/{{thread_id}}
 HYPERAGENT_INTERRUPT_API_TEMPLATE = f"{HYPERAGENT_BASE_URL}/api/threads/{{thread_id}}/interrupt"
 # Verified live: returns the account (userId, email, name, ...) for a valid session.
 HYPERAGENT_AUTH_ME_API = f"{HYPERAGENT_BASE_URL}/api/auth/me"
+# Verified via captured web traffic — presigned upload flow:
+#   POST /api/uploads {filename, mimeType, sizeBytes} -> {fileId, uploadUrl}
+#   PUT <uploadUrl> (raw bytes to S3); then reference fileId in chat "attachmentIds".
+HYPERAGENT_UPLOADS_API = f"{HYPERAGENT_BASE_URL}/api/uploads"
+# Billing / balance (from captured web traffic).
+HYPERAGENT_BILLING_CONSUMPTION_API = f"{HYPERAGENT_BASE_URL}/api/settings/billing/consumption"
+HYPERAGENT_BILLING_STATUS_API = f"{HYPERAGENT_BASE_URL}/api/settings/billing/status"
 # Attachment upload (verified live): POST JSON {filename, mimeType, size, content(base64)}
 # -> {success, fileId, url, ...}. The thread-scoped attachments route takes
 # {files:[{name, size, mimeType, base64}]} and binds the file to the thread.
@@ -287,9 +294,11 @@ def load_sessions() -> List[str]:
         t = t.strip()
         if t:
             tokens.append(t)
-    if SESSIONS_FILE and os.path.exists(SESSIONS_FILE):
+    # Explicit SESSIONS_FILE, or a default ``sessions.txt`` in the working dir.
+    session_file = SESSIONS_FILE or ("sessions.txt" if os.path.exists("sessions.txt") else "")
+    if session_file and os.path.exists(session_file):
         try:
-            raw = open(SESSIONS_FILE, encoding="utf-8").read().strip()
+            raw = open(session_file, encoding="utf-8").read().strip()
             if raw.startswith("["):
                 import json as _json
                 for t in _json.loads(raw):

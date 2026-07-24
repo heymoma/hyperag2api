@@ -164,14 +164,14 @@ async def accounts_endpoint(dependencies=Depends(verify_api_key)):
     """Verify configured session(s) and show which account each belongs to."""
     sessions = config.load_sessions()
     if sessions:
-        infos = await accounts.verify_all(sessions)
+        infos = await accounts.summaries(sessions)
         return {"mode": config.SESSION_MODE, "count": len(infos),
                 "accounts": infos, "balance_note": accounts.BALANCE_NOTE}
     # Browser mode: verify whatever the live session yields.
     try:
         cookies = await cookie_provider.get_cookies()
         token = cookies.get(COOKIE_NAME, "")
-        info = await accounts.verify_session(token) if token else {"valid": False, "error": "no session cookie"}
+        info = await accounts.account_summary(token) if token else {"valid": False, "error": "no session cookie"}
     except Exception as exc:
         info = {"valid": False, "error": str(exc)[:120]}
     return {"mode": "browser", "count": 1, "accounts": [info], "balance_note": accounts.BALANCE_NOTE}

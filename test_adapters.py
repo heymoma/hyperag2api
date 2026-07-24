@@ -223,6 +223,31 @@ class TestHyperagentClient(unittest.IsolatedAsyncioTestCase):
                     pass
 
 
+class TestUploadFlow(unittest.IsolatedAsyncioTestCase):
+    async def test_presigned_upload(self):
+        post_resp = MagicMock()
+        post_resp.status_code = 200
+        post_resp.json.return_value = {"fileId": "F1", "uploadUrl": "https://s3.example/x?sig"}
+        put_resp = MagicMock()
+        put_resp.status_code = 200
+        client = AsyncMock()
+        client.post.return_value = post_resp
+        client.put.return_value = put_resp
+        cm = MagicMock()
+        cm.__aenter__.return_value = client
+        with patch("src.adapters.backend.hyperagent_client.httpx.AsyncClient", return_value=cm):
+            desc = await HyperagentClient().upload_file("T1", {"c": "1"}, "a.png", b"\x89PNG", "image/png")
+        self.assertEqual(desc["id"], "F1")
+        client.post.assert_called_once()   # /api/uploads
+        client.put.assert_called_once()    # presigned S3 PUT
+
+    def test_chat_payload_attachment_ids(self):
+        payload = HyperagentClient()._build_chat_payload("hi", None, [{"id": "F1"}, {"id": "F2"}], None)
+        self.assertEqual(payload["attachmentIds"], ["F1", "F2"])
+        # no attachments -> key absent
+        self.assertNotIn("attachmentIds", HyperagentClient()._build_chat_payload("hi", None, None, None))
+
+
 class TestProcessManager(unittest.TestCase):
     @patch("socket.socket")
     def test_check_cdp_port_active(self, mock_socket_class):

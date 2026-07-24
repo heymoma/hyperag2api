@@ -15,15 +15,14 @@ from typing import Any, AsyncGenerator, Dict, List, Optional
 
 import httpx
 
-from src.core.interfaces import ChatBackend
+from src.core.interfaces import ChatBackend, AuthError
 from src.core import config
 from src.core.config import (
     HYPERAGENT_THREADS_API,
     HYPERAGENT_WARM_API_TEMPLATE,
     HYPERAGENT_CHAT_API_TEMPLATE,
     HYPERAGENT_INTERRUPT_API_TEMPLATE,
-    HYPERAGENT_UPLOAD_API,
-    HYPERAGENT_ATTACHMENTS_API_TEMPLATE,
+    HYPERAGENT_UPLOADS_API,
     DEFAULT_HEADERS,
 )
 from src.core.logging_config import get_logger
@@ -88,9 +87,9 @@ class HyperagentClient(ChatBackend):
                     if response.status_code == 200:
                         return response.json()["id"]
                     if response.status_code in (401, 403):
-                        raise RuntimeError(
+                        raise AuthError(
                             f"Authentication failed creating thread (status {response.status_code}). "
-                            "Your Hyperagent session cookies may have expired — re-login in the debug browser."
+                            "The Hyperagent session may have expired."
                         )
                     last_error = f"status {response.status_code}"
                     if response.status_code not in _RETRYABLE_STATUS:
@@ -143,9 +142,13 @@ class HyperagentClient(ChatBackend):
         payload.update(config.get_chat_feature_flags())
         if feature_flags:
             payload.update(feature_flags)
-        # NOTE: attachments are bound to the thread via /api/threads/{id}/attachments
-        # (see upload_file). The /chat endpoint rejects unknown attachment keys with
-        # a 400, so we deliberately do NOT inject them into this payload.
+        # Reference uploaded files via "attachmentIds" — the exact field the web
+        # app uses (verified from captured traffic). Each attachment carries the
+        # fileId returned by /api/uploads.
+        if attachments:
+            ids = [a.get("id") for a in attachments if a.get("id")]
+            if ids:
+                payload["attachmentIds"] = ids
         return payload
 
     async def stream_chat(
@@ -167,9 +170,8 @@ class HyperagentClient(ChatBackend):
             async with client.stream("POST", chat_url, json=chat_payload) as response:
                 if response.status_code != 200:
                     if response.status_code in (401, 403):
-                        raise RuntimeError(
-                            f"Authentication failed on chat (status {response.status_code}). "
-                            "Session cookies may have expired."
+                        raise AuthError(
+                            f"Authentication failed on chat (status {response.status_code})."
                         )
                     logger.error("Chat request failed with status: %s", response.status_code)
                     raise RuntimeError(f"Chat request failed with status {response.status_code}")
@@ -204,48 +206,43 @@ class HyperagentClient(ChatBackend):
         data: bytes,
         content_type: str,
     ) -> Optional[Dict[str, Any]]:
-        """Upload an attachment and bind it to the thread (verified live).
+        """Upload an attachment via the presigned-S3 flow (verified from web traffic).
 
-        1. POST JSON to /api/files/upload -> {success, fileId, url, ...}.
-        2. Best-effort bind to the thread via /api/threads/{id}/attachments so the
-           agent can see it. Returns a descriptor {id, url, name, mimeType, size}
-           or None (caller then proceeds text-only).
+        1. POST /api/uploads {filename, mimeType, sizeBytes} -> {fileId, uploadUrl}
+        2. PUT the raw bytes to the presigned uploadUrl (S3).
+        The returned fileId is referenced in the chat payload as ``attachmentIds``.
+        Returns {id, name, mimeType, size} or None (caller proceeds text-only).
         """
-        import base64
-
-        b64 = base64.b64encode(data).decode("ascii")
         size = len(data)
         try:
             async with httpx.AsyncClient(
                 cookies=cookies, headers=self.headers, timeout=self._timeout(config.REQUEST_READ_TIMEOUT)
             ) as client:
                 resp = await client.post(
-                    HYPERAGENT_UPLOAD_API,
-                    json={"filename": filename, "mimeType": content_type, "size": size, "content": b64},
+                    HYPERAGENT_UPLOADS_API,
+                    json={"filename": filename, "mimeType": content_type, "sizeBytes": size},
                 )
                 if resp.status_code not in (200, 201):
-                    logger.warning("File upload failed (%s): %s", resp.status_code, resp.text[:160])
+                    logger.warning("Upload init failed (%s): %s", resp.status_code, resp.text[:160])
                     return None
                 body = resp.json()
                 file_id = body.get("fileId") or body.get("id")
-                descriptor = {
-                    "id": file_id,
-                    "url": body.get("url"),
-                    "name": body.get("filename") or filename,
-                    "mimeType": body.get("mimeType") or content_type,
-                    "size": body.get("size") or size,
-                }
-                # Bind to the thread (best-effort; the fileId reference in the chat
-                # payload is the primary mechanism, so a failure here is non-fatal).
-                try:
-                    att_url = HYPERAGENT_ATTACHMENTS_API_TEMPLATE.format(thread_id=thread_id)
-                    await client.post(att_url, json={"files": [
-                        {"name": filename, "size": size, "mimeType": content_type, "base64": b64}
-                    ]})
-                except Exception as exc:  # pragma: no cover - best-effort
-                    logger.debug("Thread attach (non-fatal) failed: %s", exc)
-                logger.info("Uploaded attachment %s -> fileId=%s", filename, file_id)
-                return descriptor
+                upload_url = body.get("uploadUrl") or body.get("url")
+                if not file_id or not upload_url:
+                    logger.warning("Upload init returned no fileId/uploadUrl: %s", str(body)[:160])
+                    return None
+
+            # PUT raw bytes to the presigned URL (no app cookies — it's S3-signed).
+            # The presign signs content-length;host;if-none-match, so we MUST send
+            # If-None-Match: * (verified) — httpx sets Content-Length/Host itself.
+            async with httpx.AsyncClient(timeout=self._timeout(config.REQUEST_READ_TIMEOUT)) as s3:
+                put = await s3.put(upload_url, content=data, headers={"If-None-Match": "*"})
+                if put.status_code not in (200, 201, 204):
+                    logger.warning("Presigned PUT failed (%s): %s", put.status_code, put.text[:120])
+                    return None
+
+            logger.info("Uploaded attachment %s -> fileId=%s", filename, file_id)
+            return {"id": file_id, "name": filename, "mimeType": content_type, "size": size}
         except Exception as exc:  # pragma: no cover - network/best-effort
             logger.warning("Attachment upload error for %s: %s", filename, exc)
             return None

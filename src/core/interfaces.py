@@ -2,6 +2,11 @@ from abc import ABC, abstractmethod
 from typing import Any, AsyncGenerator, Dict, List, Optional
 
 
+class AuthError(RuntimeError):
+    """Raised on 401/403 from the backend — signals the session is dead so the
+    caller can rotate to another configured account."""
+
+
 class CookieProvider(ABC):
     """Abstraction for retrieving and managing browser session cookies."""
 
