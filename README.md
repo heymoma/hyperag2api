@@ -174,15 +174,18 @@ The proxy implements the OpenAI tool-calling loop **on top of** Hyperagent's ser
 It engages automatically whenever a request carries `tools` (no config needed). `tool_choice` supports `auto` (default), `required`, `none`, and a specific `{function}`.
 
 **Token-lean by design:**
-- The full tool schema block is injected **once per thread**; later turns of the same conversation get only a one-line reminder.
+- The full tool schema block is injected **once per thread**; later turns of the same conversation get only a one-line reminder. If your client's tool set **changes** (e.g. you add a new MCP server), the proxy detects the new signature and re-sends the full schemas automatically.
 - Tool JSON schemas are **minified**, and only the newest turn's delta is ever sent (thanks to thread reuse) — not the whole history.
+
+**Hybrid streaming:** ordinary answers stream **token-by-token** even when `tools` are present; the proxy only buffers once the `<tool_call>` sentinel appears (a partial sentinel at a token boundary is held back so it never leaks into your output).
+
+> **Adding new client MCP servers?** Nothing to do on the proxy. OpenCode advertises every configured MCP's functions in `tools` on each request, and the proxy is tool-agnostic — new tools just appear and become callable. Add them mid-conversation and the proxy re-primes the thread with the updated schemas.
 
 **Server-side tools/MCP are kept out of the way:**
 - During a tool-calling turn the proxy forces Hyperagent's own capabilities **off** (web search, browser, code, integrations, plan mode) so the **server agent delegates everything to your client** instead of doing its own thing. Controlled by `DISABLE_SERVER_MCP` (default on). `enabledIntegrations` is always empty, so Hyperagent's own MCP never fires.
 
 **Notes & limits:**
-- This is a **prompt-level bridge**, not native function calling — reliable for the common single/parallel-call loop, but not guaranteed for every edge case. It accepts both `<tool_call>{…}</tool_call>` and fenced ```tool_call``` / ```json``` blocks.
-- In tool mode the response is **buffered** (not token-streamed) so tool calls are detected reliably.
+- This is a **prompt-level bridge**, not native function calling — reliable for the common single/parallel-call loop, but not guaranteed for every edge case. The primary call format is `<tool_call>{…}</tool_call>`; fenced ```tool_call``` / ```json``` blocks are also parsed as a fallback.
 - The functions run **on your client side** (your MCP), not on Hyperagent — so **any** client MCP (Figma, filesystem, GitHub, …) works; the proxy is tool-agnostic.
 - Many tools = a larger one-time preamble; for big tool sets and long loops, pin the conversation with `X-Session-Id` (or `model@session`) for rock-solid reuse.
 

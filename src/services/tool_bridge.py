@@ -18,14 +18,36 @@ but works for the common single/parallel tool-call loop.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
+TOOL_CALL_SENTINEL = "<tool_call>"
+
 TOOL_CALL_RE = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL)
 # Fallback: fenced ```tool_call / ```json blocks holding a {"name": ...} object.
 FENCED_RE = re.compile(r"```(?:tool_call|json)?\s*(\{.*?\})\s*```", re.DOTALL)
+
+
+def tools_signature(tools: List[Any]) -> str:
+    """Stable short hash of the tool set — changes when tools are added/removed,
+    so a primed thread re-sends the full preamble if the client's MCP set changes."""
+    defs = _tool_defs(tools)
+    payload = json.dumps([[d["name"], d["parameters"]] for d in defs], sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(payload.encode("utf-8", "ignore")).hexdigest()[:16]
+
+
+def sentinel_holdback(pending: str, sentinel: str = TOOL_CALL_SENTINEL) -> int:
+    """Length of the trailing suffix of ``pending`` that is a partial prefix of
+    ``sentinel`` — those chars must be held back (not streamed) in case the next
+    tokens complete the sentinel."""
+    maxk = min(len(pending), len(sentinel) - 1)
+    for k in range(maxk, 0, -1):
+        if pending.endswith(sentinel[:k]):
+            return k
+    return 0
 
 
 def build_tool_reminder() -> str:

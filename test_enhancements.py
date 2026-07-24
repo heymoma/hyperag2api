@@ -258,6 +258,90 @@ class TestToolBridge(unittest.TestCase):
         self.assertFalse(flags["enableBrowser"])
         self.assertFalse(flags["injectPlanMode"])
 
+    def test_sentinel_holdback(self):
+        from src.services import tool_bridge
+        # a trailing partial sentinel must be held back
+        self.assertEqual(tool_bridge.sentinel_holdback("hi <tool"), 5)
+        self.assertEqual(tool_bridge.sentinel_holdback("nothing here"), 0)
+
+    def test_tools_signature_changes(self):
+        from src.services import tool_bridge
+        sig1 = tool_bridge.tools_signature(TOOLS)
+        sig2 = tool_bridge.tools_signature(TOOLS + [{"type": "function", "function": {"name": "extra", "parameters": {}}}])
+        self.assertNotEqual(sig1, sig2)
+
+
+def _tok_stream(*parts):
+    def f(thread_id, prompt, cookies, **kw):
+        async def g():
+            for p in parts:
+                yield {"type": "text", "content": p}
+        return g()
+    return f
+
+
+async def _collect_parts(agen):
+    contents, calls, finish = [], [], "stop"
+    async for chunk in agen:
+        if not chunk.startswith("data: "):
+            continue
+        ds = chunk[6:].strip()
+        if ds == "[DONE]":
+            break
+        try:
+            d = json.loads(ds)
+        except Exception:
+            continue
+        ch = (d.get("choices") or [{}])[0]
+        if ch.get("finish_reason"):
+            finish = ch["finish_reason"]
+        delta = ch.get("delta", {})
+        if delta.get("content"):
+            contents.append(delta["content"])
+        for tc in delta.get("tool_calls", []) or []:
+            calls.append(tc.get("function", {}))
+    return contents, calls, finish
+
+
+import json  # noqa: E402  (used by _collect_parts)
+
+
+class TestHybridStreaming(unittest.IsolatedAsyncioTestCase):
+    def _svc(self, stream_fn):
+        cookies = AsyncMock()
+        cookies.get_cookies = AsyncMock(return_value={"s": "1"})
+        backend = MagicMock()
+        backend.create_thread = AsyncMock(return_value="T1")
+        backend.warm_thread = AsyncMock(return_value=None)
+        backend.upload_file = AsyncMock(return_value=None)
+        backend.interrupt = AsyncMock(return_value=None)
+        backend.stream_chat = MagicMock(side_effect=stream_fn)
+        return ChatService(cookies, backend, session_store=SessionStore(persist=False))
+
+    async def test_plain_text_streams_in_chunks(self):
+        svc = self._svc(_tok_stream("Hel", "lo ", "world"))
+        req = ChatCompletionRequest(model="opus-4.8", stream=True, tools=TOOLS,
+                                    messages=[Message(role="user", content="hi")])
+        contents, calls, finish = await _collect_parts(svc.execute_chat_stream(req))
+        self.assertEqual("".join(contents), "Hello world")
+        self.assertGreater(len(contents), 1)   # actually streamed, not buffered
+        self.assertEqual(finish, "stop")
+        self.assertFalse(calls)
+
+    async def test_tool_call_split_across_tokens(self):
+        svc = self._svc(_tok_stream(
+            "Sure ", "<tool", "_call>",
+            '{"name":"get_weather","arguments":{"city":"Rome"}}', "</tool_call>",
+        ))
+        req = ChatCompletionRequest(model="opus-4.8", stream=True, tools=TOOLS,
+                                    messages=[Message(role="user", content="weather in Rome")])
+        contents, calls, finish = await _collect_parts(svc.execute_chat_stream(req))
+        self.assertEqual(finish, "tool_calls")
+        self.assertTrue(calls and calls[0]["name"] == "get_weather")
+        # the partial sentinel must never leak into streamed content
+        self.assertTrue(all("<tool" not in c for c in contents))
+        self.assertEqual("".join(contents), "Sure ")
+
 
 class TestToolCalling(unittest.IsolatedAsyncioTestCase):
     def setUp(self):

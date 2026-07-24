@@ -54,9 +54,10 @@ class ChatService:
         self.cookie_provider = cookie_provider
         self.chat_backend = chat_backend
         self.session_store = session_store or SessionStore.from_config()
-        # Threads that have already received the full tool preamble this process,
-        # so continuation turns send only a one-line reminder (token optimization).
-        self._tools_primed: set = set()
+        # thread_id -> tools signature already delivered this process. Later turns
+        # send only a one-line reminder (token optimization); a changed signature
+        # (client added/removed MCP tools) re-sends the full preamble.
+        self._tools_primed: Dict[str, str] = {}
 
     # ------------------------------------------------------------------ #
     # Model listing                                                       #
@@ -507,6 +508,7 @@ class ChatService:
 
         yield format_openai_chunk(chat_id, model, "", role="assistant")
         full_preamble = tool_bridge.build_tool_preamble(req.tools, req.tool_choice)
+        tools_sig = tool_bridge.tools_signature(req.tools)
         # Server-side tools/MCP are forced off during tool turns so the server
         # agent delegates everything to the client instead of acting on its own.
         tool_flags = config.server_tools_off_flags() if config.DISABLE_SERVER_MCP else None
@@ -518,10 +520,10 @@ class ChatService:
                 thread_id = rec["thread_id"]
                 count = int(rec.get("message_count") or 0)
                 reused = True
-                # Token optimization: only re-send the full schema block if this
-                # thread hasn't been primed this process; otherwise a 1-line hint.
-                primed = thread_id in self._tools_primed
-                pre = full_preamble if not primed else tool_bridge.build_tool_reminder()
+                # Token optimization: re-send full schemas only if not primed OR
+                # the tool set changed (client added/removed MCP); else a 1-liner.
+                primed = self._tools_primed.get(thread_id) == tools_sig
+                pre = tool_bridge.build_tool_reminder() if primed else full_preamble
                 tail = req.messages[count:] if count < len(req.messages) else []
                 content = self._build_tool_delta(tail, pre) or self._latest_user_text(req.messages)
                 logger.info("Tool-mode: reusing thread %s (count=%d, primed=%s)", thread_id, count, primed)
@@ -538,14 +540,19 @@ class ChatService:
                 logger.info("Tool-mode: created thread %s", thread_id)
 
             if thread_id:
-                self._tools_primed.add(thread_id)
+                self._tools_primed[thread_id] = tools_sig
             meta["thread_id"] = thread_id
             meta["reused_thread"] = reused
             attachments = await self._collect_attachments(req, thread_id, cookies)
 
-            # Buffer the full response (reliable tool-call detection > token streaming).
-            text_buf = ""
-            reason_buf = ""
+            # Hybrid streaming: stream ordinary text token-by-token, and only switch
+            # to buffering once the <tool_call> sentinel appears. A partial sentinel
+            # at a token boundary is held back so it is never leaked as content.
+            sentinel = tool_bridge.TOOL_CALL_SENTINEL
+            pending = ""
+            streamed: List[str] = []
+            tool_region = ""
+            in_tool = False
             async for data in self.chat_backend.stream_chat(
                 thread_id, content, cookies, session_id=explicit,
                 attachments=attachments, feature_flags=tool_flags,
@@ -558,26 +565,55 @@ class ChatService:
                 if dtype == "done":
                     break
                 if self._is_reasoning(dtype, data):
-                    reason_buf += self._extract_event_text(data)
-                elif dtype in _TEXT_TYPES or ("content" in data and not dtype):
-                    text_buf += self._extract_event_text(data)
+                    rtext = self._extract_event_text(data)
+                    if rtext:
+                        yield format_openai_chunk(chat_id, model, "", reasoning=rtext)
+                    continue
+                if not (dtype in _TEXT_TYPES or ("content" in data and not dtype)):
+                    continue
+                tok = self._extract_event_text(data)
+                if not tok:
+                    continue
+                if in_tool:
+                    tool_region += tok
+                    continue
+                pending += tok
+                idx = pending.find(sentinel)
+                if idx != -1:
+                    before = pending[:idx]
+                    if before:
+                        streamed.append(before)
+                        yield format_openai_chunk(chat_id, model, before)
+                    in_tool = True
+                    tool_region = pending[idx:]
+                    pending = ""
+                else:
+                    hb = tool_bridge.sentinel_holdback(pending, sentinel)
+                    emit = pending[: len(pending) - hb]
+                    if emit:
+                        streamed.append(emit)
+                        yield format_openai_chunk(chat_id, model, emit)
+                    pending = pending[len(pending) - hb:]
+
+            if pending and not in_tool:
+                streamed.append(pending)
+                yield format_openai_chunk(chat_id, model, pending)
+                pending = ""
 
             await self.session_store.put(key, thread_id, mapped_model, len(req.messages))
 
-            calls = tool_bridge.parse_tool_calls(text_buf)
-            if reason_buf:
-                yield format_openai_chunk(chat_id, model, "", reasoning=reason_buf)
+            calls = tool_bridge.parse_tool_calls(tool_region) if in_tool else []
             if calls:
                 for c in calls:
                     yield format_openai_chunk(chat_id, model, "", tool_calls=[c])
                 finish_reason = "tool_calls"
-                meta["completion_text"] = ""
                 logger.info("Tool-mode: emitted %d tool_call(s)", len(calls))
-            else:
-                clean = tool_bridge.strip_tool_blocks(text_buf) or text_buf
-                if clean:
-                    yield format_openai_chunk(chat_id, model, clean)
-                meta["completion_text"] = clean
+            elif in_tool and tool_region:
+                # Sentinel opened but nothing parseable — surface raw text so
+                # nothing is silently dropped.
+                yield format_openai_chunk(chat_id, model, tool_region)
+                streamed.append(tool_region)
+            meta["completion_text"] = "".join(streamed)
 
         except asyncio.CancelledError:
             logger.info("Client disconnected (tool mode); interrupting thread %s", thread_id)
