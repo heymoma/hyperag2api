@@ -67,6 +67,9 @@ class ChatCompletionRequest(BaseModel):
     model: str = "opus-latest"
     messages: List[Message]
     stream: bool = False
+    # Client-side tool calling (function calling / MCP bridge).
+    tools: Optional[List[Any]] = None
+    tool_choice: Optional[Any] = None
     # Accepted for compatibility (currently advisory only).
     temperature: Optional[float] = None
     top_p: Optional[float] = None

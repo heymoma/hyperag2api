@@ -22,6 +22,7 @@
 - 🧠 **Reasoning / thinking display** — model reasoning is streamed as OpenAI `reasoning_content` and/or inline `<think>…</think>` tags (`REASONING_STYLE`).
 - 🛡️ **Stability** — short-TTL cookie caching over a single CDP connection, automatic re-auth on 401/403, split connect/stream timeouts, exponential-backoff retries, resilient SSE parsing, and SSE keepalive heartbeats so long generations don't time out.
 - 🔧 **Tool-call passthrough** — backend tool activity can surface as OpenAI `tool_calls` deltas (`TOOLCALL_MODE`).
+- 🔌 **Client-side tool calling (MCP / functions)** — bridges the OpenAI function-calling loop over Hyperagent's text agent, so clients like **OpenCode** can use their **own** MCP servers/functions through the proxy. Accepts `tools`, makes the model emit `tool_calls` with `finish_reason: "tool_calls"`, and feeds your `role:"tool"` results back into the same thread. Verified live.
 - 🖼️ **Multimodal input** — `image_url` content parts are uploaded via `/api/files/upload` and bound to the thread via `/api/threads/{id}/attachments`.
 - 📊 **Live dashboard** — a read-only monitor at `/dashboard` (plus JSON at `/api/stats`) showing active sessions, recent requests, latency, tokens, and browser/cookie health.
 - ❤️ **Health probe** — `/health` reports browser connectivity and login state.
@@ -157,6 +158,25 @@ Run the server standalone (without the launcher):
 ```bash
 PORT=8080 LOG_LEVEL=DEBUG python3 proxy_server.py
 ```
+
+---
+
+## 🔌 Client-side tool calling (MCP / functions)
+
+The proxy implements the OpenAI tool-calling loop **on top of** Hyperagent's server-side agent, so clients like **OpenCode** can use their **own** MCP servers / functions through it:
+
+1. Your client sends `tools` (function definitions) with the request.
+2. The proxy injects a tool-use contract into the conversation; the model writes a `<tool_call>{…}</tool_call>` request, which the proxy converts into OpenAI `tool_calls` with `finish_reason: "tool_calls"`.
+3. Your client executes the tool (its MCP server) and posts the `role:"tool"` result back.
+4. The proxy forwards the result into the **same** Hyperagent thread and the model continues — more tool calls or a final answer.
+
+It engages automatically whenever a request carries `tools` (no config needed). `tool_choice` supports `auto` (default), `required`, `none`, and a specific `{function}`.
+
+**Notes & limits:**
+- This is a **prompt-level bridge**, not native function calling — reliable for the common single/parallel-call loop, but not guaranteed for every edge case.
+- In tool mode the response is **buffered** (not token-streamed) so tool calls are detected reliably.
+- The functions run **on your client side** (your MCP), not on Hyperagent.
+- For long tool loops, pin the conversation with the `X-Session-Id` header (or `model@session`) for rock-solid thread reuse.
 
 ---
 

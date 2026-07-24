@@ -201,5 +201,97 @@ class TestChatServiceSessions(unittest.IsolatedAsyncioTestCase):
             config.TOOLCALL_MODE = orig
 
 
+TOOLS = [{
+    "type": "function",
+    "function": {
+        "name": "get_weather",
+        "description": "Get the weather for a city",
+        "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+    },
+}]
+
+
+class TestToolBridge(unittest.TestCase):
+    def test_parse_tool_calls(self):
+        from src.services import tool_bridge
+        text = 'Sure.<tool_call>{"name": "get_weather", "arguments": {"city": "Paris"}}</tool_call>'
+        calls = tool_bridge.parse_tool_calls(text)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["function"]["name"], "get_weather")
+        self.assertIn("Paris", calls[0]["function"]["arguments"])
+
+    def test_parse_multiple(self):
+        from src.services import tool_bridge
+        text = ('<tool_call>{"name":"a","arguments":{}}</tool_call>'
+                '<tool_call>{"name":"b","arguments":{"x":1}}</tool_call>')
+        calls = tool_bridge.parse_tool_calls(text)
+        self.assertEqual([c["function"]["name"] for c in calls], ["a", "b"])
+
+    def test_preamble_and_disabled(self):
+        from src.services import tool_bridge
+        self.assertIn("get_weather", tool_bridge.build_tool_preamble(TOOLS))
+        self.assertTrue(tool_bridge.tools_disabled("none"))
+        self.assertFalse(tool_bridge.tools_disabled("auto"))
+
+
+class TestToolCalling(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.cookies = AsyncMock()
+        self.cookies.get_cookies = AsyncMock(return_value={"s": "1"})
+        self.backend = MagicMock()
+        self.backend.create_thread = AsyncMock(return_value="T1")
+        self.backend.warm_thread = AsyncMock(return_value=None)
+        self.backend.upload_file = AsyncMock(return_value=None)
+        self.backend.interrupt = AsyncMock(return_value=None)
+        self.sent = []
+
+        def mk(thread_id, prompt, cookies, **kw):
+            self.sent.append(prompt)
+
+            async def gen():
+                if "Result from" in prompt:
+                    yield {"type": "text", "content": "The weather in Paris is sunny, 25C."}
+                else:
+                    yield {"type": "text",
+                           "content": '<tool_call>{"name": "get_weather", "arguments": {"city": "Paris"}}</tool_call>'}
+            return gen()
+
+        self.backend.stream_chat = MagicMock(side_effect=mk)
+        self.svc = ChatService(self.cookies, self.backend, session_store=SessionStore(persist=False))
+
+    async def test_tool_call_emitted(self):
+        req = ChatCompletionRequest(model="opus-4.8", stream=True, tools=TOOLS,
+                                    messages=[Message(role="user", content="Weather in Paris?")])
+        blob = "".join(await _drain(self.svc.execute_chat_stream(req)))
+        self.assertIn("tool_calls", blob)
+        self.assertIn("get_weather", blob)
+        self.assertIn('"finish_reason": "tool_calls"', blob)
+
+    async def test_tool_result_continuation_reuses_thread(self):
+        req1 = ChatCompletionRequest(model="opus-4.8", stream=True, tools=TOOLS,
+                                     messages=[Message(role="user", content="Weather in Paris?")])
+        await _drain(self.svc.execute_chat_stream(req1))
+
+        req2 = ChatCompletionRequest(model="opus-4.8", stream=True, tools=TOOLS, messages=[
+            Message(role="user", content="Weather in Paris?"),
+            Message(role="assistant", content=None, tool_calls=[
+                {"id": "call_1", "type": "function",
+                 "function": {"name": "get_weather", "arguments": "{\"city\":\"Paris\"}"}}]),
+            Message(role="tool", tool_call_id="call_1", content="sunny 25C"),
+        ])
+        blob = "".join(await _drain(self.svc.execute_chat_stream(req2)))
+        self.assertIn("sunny", blob)                       # final answer streamed
+        self.assertEqual(self.backend.create_thread.await_count, 1)  # thread reused
+        self.assertTrue(any("Result from" in p and "sunny 25C" in p for p in self.sent))
+
+    async def test_non_stream_tool_calls(self):
+        req = ChatCompletionRequest(model="opus-4.8", stream=False, tools=TOOLS,
+                                    messages=[Message(role="user", content="Weather?")])
+        resp = await self.svc.execute_chat_non_stream(req)
+        self.assertEqual(resp.choices[0].finish_reason, "tool_calls")
+        self.assertTrue(resp.choices[0].message.tool_calls)
+        self.assertEqual(resp.choices[0].message.tool_calls[0]["function"]["name"], "get_weather")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -28,6 +28,7 @@ from src.core.config import MODEL_MAPPING, resolve_model
 from src.core.models import format_openai_chunk, sse_comment, build_usage, DONE
 from src.core.session_store import SessionStore
 from src.core.logging_config import get_logger
+from src.services import tool_bridge
 from src.adapters.api.schemas import ChatCompletionRequest, ChatCompletionResponse, Choice, Message
 
 logger = get_logger("chat")
@@ -226,9 +227,17 @@ class ChatService:
         meta: Optional[Dict[str, Any]] = None,
     ) -> AsyncGenerator[str, None]:
         """Orchestrate the streaming chat completion, yielding SSE chunks."""
+        meta = meta if meta is not None else {}
+
+        # Client-side tool calling (function calling / MCP bridge) is a separate,
+        # self-contained path — only engaged when the request carries tools.
+        if req.tools and not tool_bridge.tools_disabled(req.tool_choice):
+            async for out in self._execute_tool_mode(req, session_id, meta):
+                yield out
+            return
+
         chat_id = f"chatcmpl-{uuid.uuid4()}"
         model = req.model
-        meta = meta if meta is not None else {}
 
         mapped_model, explicit, lookup_key, system_prompt_key, pairs = self._resolve_session(req, session_id)
         meta["session_key"] = lookup_key
@@ -439,6 +448,138 @@ class ChatService:
             pass
 
     # ------------------------------------------------------------------ #
+    # Client-side tool calling (OpenAI function-calling bridge)            #
+    # ------------------------------------------------------------------ #
+    def _conv_key(self, system_prompt: str, model: str, messages: List[Any]) -> str:
+        """Stable key for a tool conversation: system + model + first user msg."""
+        first_user = ""
+        for m in messages:
+            role, content = self._msg_role_content(m)
+            if role == "user":
+                first_user = content
+                break
+        h = self._hash_key(system_prompt, model, [("user", first_user)])
+        return "cv:" + h.split(":", 1)[-1]
+
+    def _build_tool_delta(self, tail: List[Any], preamble: str) -> str:
+        """Compose the text to send for a tool continuation turn."""
+        users, tool_msgs, _ = tool_bridge.split_new_messages(tail)
+        result_block = tool_bridge.format_tool_results(tail)
+        user_text = "\n\n".join(
+            self._msg_role_content(u)[1] for u in users if self._msg_role_content(u)[1]
+        )
+        if result_block and user_text:
+            content = result_block + "\n\n" + user_text
+        elif result_block:
+            content = result_block
+        else:
+            content = user_text
+        # If this turn introduces a NEW user message, restate the tool contract
+        # (the thread may predate tools, and it keeps the model from refusing).
+        if user_text and preamble:
+            content = preamble + "\n\n---\n\n" + content
+        return content.strip()
+
+    async def _execute_tool_mode(
+        self, req: ChatCompletionRequest, session_id: Optional[str], meta: Dict[str, Any]
+    ) -> AsyncGenerator[str, None]:
+        chat_id = f"chatcmpl-{uuid.uuid4()}"
+        model = req.model
+        mapped_model, suffix_session = resolve_model(req.model)
+        explicit = session_id or suffix_session or (req.user or None)
+        system_prompt, combined_prompt = self._prepare_prompts(req.messages)
+        key = f"sid:{explicit}" if explicit else self._conv_key(system_prompt, mapped_model, req.messages)
+        meta["session_key"] = key
+
+        try:
+            cookies = await self.cookie_provider.get_cookies()
+        except Exception as e:
+            logger.error("Failed to retrieve browser cookies: %s", e)
+            meta["error"] = str(e)
+            yield format_openai_chunk(chat_id, model, "", role="assistant")
+            yield format_openai_chunk(chat_id, model, f"\n[Cookie Error: {e}]")
+            yield format_openai_chunk(chat_id, model, "", finish_reason="stop")
+            yield DONE
+            return
+
+        yield format_openai_chunk(chat_id, model, "", role="assistant")
+        preamble = tool_bridge.build_tool_preamble(req.tools, req.tool_choice)
+        thread_id: Optional[str] = None
+        finish_reason = "stop"
+        try:
+            rec = await self.session_store.get_record(key)
+            if rec:
+                thread_id = rec["thread_id"]
+                count = int(rec.get("message_count") or 0)
+                reused = True
+                tail = req.messages[count:] if count < len(req.messages) else []
+                content = self._build_tool_delta(tail, preamble) or self._latest_user_text(req.messages)
+                logger.info("Tool-mode: reusing thread %s (count=%d)", thread_id, count)
+            else:
+                thread_id = await self.chat_backend.create_thread(
+                    mapped_model, system_prompt, cookies, session_id=explicit
+                )
+                await self.chat_backend.warm_thread(thread_id, cookies)
+                reused = False
+                user_text = self._latest_user_text(req.messages) or combined_prompt
+                # Deliver the tool contract in the USER turn — the platform's own
+                # agent system prompt otherwise overrides an injected systemPrompt.
+                content = (preamble + "\n\n---\n\nUser request:\n" + user_text) if preamble else user_text
+                logger.info("Tool-mode: created thread %s", thread_id)
+
+            meta["thread_id"] = thread_id
+            meta["reused_thread"] = reused
+            attachments = await self._collect_attachments(req, thread_id, cookies)
+
+            # Buffer the full response (reliable tool-call detection > token streaming).
+            text_buf = ""
+            reason_buf = ""
+            async for data in self.chat_backend.stream_chat(
+                thread_id, content, cookies, session_id=explicit, attachments=attachments
+            ):
+                if not isinstance(data, dict):
+                    continue
+                dtype = str(data.get("type", ""))
+                if dtype in _IGNORE_TYPES:
+                    continue
+                if dtype == "done":
+                    break
+                if self._is_reasoning(dtype, data):
+                    reason_buf += self._extract_event_text(data)
+                elif dtype in _TEXT_TYPES or ("content" in data and not dtype):
+                    text_buf += self._extract_event_text(data)
+
+            await self.session_store.put(key, thread_id, mapped_model, len(req.messages))
+
+            calls = tool_bridge.parse_tool_calls(text_buf)
+            if reason_buf:
+                yield format_openai_chunk(chat_id, model, "", reasoning=reason_buf)
+            if calls:
+                for c in calls:
+                    yield format_openai_chunk(chat_id, model, "", tool_calls=[c])
+                finish_reason = "tool_calls"
+                meta["completion_text"] = ""
+                logger.info("Tool-mode: emitted %d tool_call(s)", len(calls))
+            else:
+                clean = tool_bridge.strip_tool_blocks(text_buf) or text_buf
+                if clean:
+                    yield format_openai_chunk(chat_id, model, clean)
+                meta["completion_text"] = clean
+
+        except asyncio.CancelledError:
+            logger.info("Client disconnected (tool mode); interrupting thread %s", thread_id)
+            self._fire_interrupt(thread_id, cookies)
+            raise
+        except Exception as e:
+            logger.error("Tool-mode stream error: %s", e)
+            meta["error"] = str(e)
+            yield format_openai_chunk(chat_id, model, f"\n[Stream Error: {e}]")
+
+        meta["finish_reason"] = finish_reason
+        yield format_openai_chunk(chat_id, model, "", finish_reason=finish_reason)
+        yield DONE
+
+    # ------------------------------------------------------------------ #
     # Non-streaming                                                       #
     # ------------------------------------------------------------------ #
     async def execute_chat_non_stream(
@@ -452,6 +593,8 @@ class ChatService:
         meta = meta if meta is not None else {}
         text_content = ""
         reasoning_content = ""
+        tool_calls: List[Dict[str, Any]] = []
+        finish_reason = "stop"
 
         async for chunk in self.execute_chat_stream(req, session_id=session_id, meta=meta):
             if not chunk.startswith("data: "):
@@ -466,11 +609,19 @@ class ChatService:
             choices = data.get("choices", [])
             if not choices:
                 continue
+            if choices[0].get("finish_reason"):
+                finish_reason = choices[0]["finish_reason"]
             delta = choices[0].get("delta", {})
-            if "content" in delta and delta["content"]:
+            if delta.get("content"):
                 text_content += delta["content"]
-            if "reasoning_content" in delta and delta["reasoning_content"]:
+            if delta.get("reasoning_content"):
                 reasoning_content += delta["reasoning_content"]
+            for tc in delta.get("tool_calls", []) or []:
+                tool_calls.append({
+                    "id": tc.get("id"),
+                    "type": tc.get("type", "function"),
+                    "function": tc.get("function", {}),
+                })
 
         usage = None
         if config.ENABLE_USAGE:
@@ -479,20 +630,16 @@ class ChatService:
             meta["prompt_tokens"] = usage["prompt_tokens"]
             meta["completion_tokens"] = usage["completion_tokens"]
 
+        message = Message(
+            role="assistant",
+            content=(text_content if text_content or not tool_calls else None),
+            reasoning_content=reasoning_content if reasoning_content else None,
+            tool_calls=tool_calls or None,
+        )
         return ChatCompletionResponse(
             id=chat_id,
             created=int(time.time()),
             model=req.model,
-            choices=[
-                Choice(
-                    index=0,
-                    message=Message(
-                        role="assistant",
-                        content=text_content,
-                        reasoning_content=reasoning_content if reasoning_content else None,
-                    ),
-                    finish_reason="stop",
-                )
-            ],
+            choices=[Choice(index=0, message=message, finish_reason=finish_reason)],
             usage=usage,
         )

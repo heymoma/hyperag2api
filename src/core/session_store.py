@@ -188,6 +188,23 @@ class SessionStore:
             self._cache.move_to_end(key)
             return rec.thread_id
 
+    async def get_record(self, key: str) -> Optional[Dict[str, object]]:
+        """Like :meth:`get` but returns {thread_id, message_count, model}."""
+        async with self._get_lock():
+            rec = self._cache.get(key)
+            if rec is None:
+                rec = self._db_read(key)
+                if rec is not None:
+                    self._cache[key] = rec
+            if rec is None or self._expired(rec):
+                if rec is not None:
+                    self._cache.pop(key, None)
+                    self._db_delete(key)
+                return None
+            rec.last_used = time.time()
+            self._cache.move_to_end(key)
+            return {"thread_id": rec.thread_id, "message_count": rec.message_count, "model": rec.model}
+
     async def put(self, key: str, thread_id: str, model: str = "", message_count: int = 0) -> None:
         """Create or update the mapping ``key`` → ``thread_id``."""
         async with self._get_lock():
