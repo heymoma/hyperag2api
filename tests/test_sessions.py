@@ -11,14 +11,13 @@ class TestLoadSessions(unittest.TestCase):
     def test_env_single_and_plural_dedup(self):
         env = {"HYPERAGENT_SESSION": "tokA", "HYPERAGENT_SESSIONS": "tokB, tokA ,tokC"}
         with patch.dict("os.environ", env, clear=False):
-            with patch.object(config, "SESSIONS_FILE", ""):
+            with patch.object(config, "SESSIONS_FILE", ""), patch.object(config, "_FILE", {}):
                 toks = config.load_sessions()
         self.assertEqual(toks, ["tokA", "tokB", "tokC"])  # order preserved, deduped
 
     def test_empty(self):
         with patch.dict("os.environ", {"HYPERAGENT_SESSION": "", "HYPERAGENT_SESSIONS": ""}, clear=False):
-            with patch.object(config, "SESSIONS_FILE", ""):
-                # avoid picking up a stray sessions.txt in the cwd
+            with patch.object(config, "SESSIONS_FILE", ""), patch.object(config, "_FILE", {}):
                 import os
                 if not os.path.exists("sessions.txt"):
                     self.assertEqual(config.load_sessions(), [])
@@ -29,7 +28,7 @@ class TestLoadSessions(unittest.TestCase):
         with open(path, "w") as f:
             f.write("# comment\ntokX\ntokY\n\n")
         with patch.dict("os.environ", {"HYPERAGENT_SESSION": "", "HYPERAGENT_SESSIONS": ""}, clear=False):
-            with patch.object(config, "SESSIONS_FILE", path):
+            with patch.object(config, "SESSIONS_FILE", path), patch.object(config, "_FILE", {}):
                 self.assertEqual(config.load_sessions(), ["tokX", "tokY"])
 
 
