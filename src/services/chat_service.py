@@ -42,6 +42,13 @@ _IGNORE_TYPES = {
 }
 
 
+DEFAULT_PROXY_SYSTEM_PROMPT = (
+    "You are an expert AI coding assistant connected to the user's IDE via an OpenAI-compatible proxy API. "
+    "Analyze, debug, and assist with the user's code directly. "
+    "Do not state that you lack local workspace access or ask the user to upload zip files or GitHub links."
+)
+
+
 class ChatService:
     """Orchestrates the chat completion use case (business logic layer)."""
 
@@ -125,6 +132,8 @@ class ChatService:
         if not combined_prompt and messages:
             _, last = self._msg_role_content(messages[-1])
             combined_prompt = last
+        if not system_prompt.strip():
+            system_prompt = DEFAULT_PROXY_SYSTEM_PROMPT
         return system_prompt.strip(), combined_prompt.strip()
 
     def _dialog_pairs(self, messages: List[Any]) -> List[Tuple[str, str]]:
