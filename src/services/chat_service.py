@@ -341,6 +341,11 @@ class ChatService:
             logger.info("Client disconnected; interrupting thread %s", thread_id)
             self._fire_interrupt(thread_id, cookies)
             raise
+        except AuthError as e:
+            logger.warning("Session auth error during stream (%s); invalidating session.", e)
+            self.cookie_provider.invalidate()
+            meta["error"] = str(e)
+            yield format_openai_chunk(chat_id, model, f"\n[Stream Error: {e} (Session invalidated, rotating on next request)]")
         except Exception as e:
             logger.error("Stream error in execute_chat_stream: %s", e)
             meta["error"] = str(e)
