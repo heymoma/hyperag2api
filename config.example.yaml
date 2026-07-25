@@ -1,0 +1,41 @@
+# hyperag2api — configuration (copy to config.yaml)
+# Precedence: built-in defaults < this file < environment variables.
+# The config file is read from $CONFIG_FILE or ./config.yaml (or ./config.yml).
+
+# --- Sessions (required) -----------------------------------------------------
+# Paste the value of the "__Host-hyperagent_session" cookie from a logged-in
+# browser (DevTools -> Application -> Cookies -> hyperagent.com). Add several to
+# rotate across accounts. You can also put tokens in sessions.txt (one per line).
+sessions:
+  - "PASTE_YOUR___Host-hyperagent_session_VALUE_HERE"
+  # - "second_account_token"
+# sessions_file: sessions.txt        # optional: one token per line, or a JSON array
+
+# --- Server ------------------------------------------------------------------
+host: 127.0.0.1
+port: 8000
+proxy_api_key: ""                    # if set, clients must send Authorization: Bearer <key>
+
+# --- Behaviour ---------------------------------------------------------------
+low_latency_mode: true               # keep server-side tools/plan-mode off (fast + cheap)
+reasoning_style: reasoning_content   # reasoning_content | think_tags | both
+toolcall_mode: content               # content | openai | off
+enable_multimodal: true
+disable_server_mcp: true             # during client tool-calls, keep Hyperagent's own tools off
+
+# --- Anti-Detection ----------------------------------------------------------
+tls_impersonate: chrome124             # chrome124 | chrome120 | safari15_5 | edge101
+enable_tls_fingerprint: true          # spoof browser TLS ClientHello JA3/JA4 fingerprint
+enable_human_jitter: true             # randomized human timing delay before requests
+jitter_min_ms: 150
+jitter_max_ms: 600
+enable_ua_rotation: true              # rotate modern browser User-Agents + Sec-CH-UA
+enable_session_cooldown: true         # quarantine rate-limited/auth-failed sessions
+cooldown_seconds: 600                 # cooldown quarantine duration in seconds (10 mins)
+
+# --- Sessions/threads --------------------------------------------------------
+session_persist: true                # persist session->thread map (SQLite)
+session_db_path: sessions.db
+
+# --- Logging -----------------------------------------------------------------
+log_level: INFO
