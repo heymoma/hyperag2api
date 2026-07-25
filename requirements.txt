@@ -4,3 +4,7 @@ uvicorn[standard]>=0.29
 httpx>=0.27
 pydantic>=2.6
 PyYAML>=6.0
+
+# Optional: TLS/JA3 browser impersonation. Without it the proxy still works,
+# falling back to plain httpx (see ENABLE_TLS_FINGERPRINT).
+curl_cffi>=0.7

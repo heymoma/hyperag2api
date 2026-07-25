@@ -83,6 +83,8 @@ cooldown_seconds: 600
 | `/v1/chat/completions` | OpenAI-compatible chat completion route (Streaming & Non-streaming). |
 | `/v1/models` | List supported models. |
 | `/health` | Health check endpoint returning session & system status. |
+| `/` | Live monitoring dashboard (sessions, streams, recent requests). |
+| `/api/live-status` | JSON feed behind the dashboard. |
 
 ---
 
@@ -122,11 +124,48 @@ In your `opencode.jsonc` (`~/.config/opencode/opencode.jsonc` or `%APPDATA%\open
 | **DeepSeek** | `hyperag2api/deepseek-v4-pro` | DeepSeek V4 Pro |
 | **xAI** | `hyperag2api/grok-4.5` | Grok 4.5 |
 
+## 🗂️ Project Structure
+
+The codebase is layered, and dependencies only ever point inwards:
+`adapters` → `services` → `core`, with `infra` supplying the transport.
+
+```
+src/
+├── core/                    # Framework-free foundation
+│   ├── config.py            #   Settings: defaults < config.yaml < env
+│   ├── schemas.py           #   OpenAI request/response models
+│   ├── interfaces.py        #   CookieProvider / ChatBackend ports
+│   ├── sse.py               #   SSE chunk formatting + token estimates
+│   ├── session_store.py     #   Conversation key → thread id (LRU + SQLite)
+│   └── stats.py             #   In-memory runtime counters
+├── infra/                   # How bytes reach hyperagent.com
+│   ├── fingerprint.py       #   Browser headers, Client Hints, timing jitter
+│   └── http_client.py       #   curl_cffi (TLS impersonation) / httpx transport
+├── services/                # Business logic
+│   ├── chat_service.py      #   Orchestrates one completion end to end
+│   ├── conversation.py      #   Prompts and session keys
+│   ├── threads.py           #   Thread creation with account rotation
+│   ├── attachments.py       #   Multimodal image uploads
+│   ├── streaming.py         #   Backend iteration with keepalives
+│   ├── stream_events.py     #   Classification of backend SSE frames
+│   ├── render.py            #   Frames → OpenAI delta chunks
+│   ├── tool_bridge.py       #   The tool-calling prompt contract
+│   ├── tool_mode.py         #   One client tool-calling turn
+│   └── accounts.py          #   Session verification (cached)
+├── adapters/                # The outside world
+│   ├── api/                 #   FastAPI app, routers, DI, dashboard
+│   ├── backend/             #   Hyperagent HTTP client
+│   └── session/             #   Config-provided session tokens
+└── server.py                # Entry point (start.py delegates here)
+```
+
+---
+
 ## 🧪 Testing
 
 Run unit tests:
 ```bash
-python3 -m unittest discover -s tests -p "test_*.py"
+python3 -m pytest tests
 ```
 
 ---

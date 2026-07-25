@@ -5,12 +5,13 @@ import unittest
 from unittest.mock import patch, AsyncMock
 
 from src.core import config
-from src.core.anti_detection import (
-    get_random_browser_headers,
-    apply_human_jitter,
-    get_async_session,
+from src.infra.fingerprint import (
     BROWSER_PROFILES,
+    apply_human_jitter,
+    get_endpoint_headers,
+    get_random_browser_headers,
 )
+from src.infra.http_client import get_async_session
 
 
 class TestAntiDetection(unittest.IsolatedAsyncioTestCase):
@@ -30,7 +31,6 @@ class TestAntiDetection(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(headers["User-Agent"], "Custom-UA")
 
     def test_endpoint_headers(self):
-        from src.core.anti_detection import get_endpoint_headers
         h_new = get_endpoint_headers("new_thread")
         self.assertIn("/threads/new", h_new["Referer"])
         self.assertEqual(h_new["Sec-Fetch-Site"], "same-origin")

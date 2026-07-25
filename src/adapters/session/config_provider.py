@@ -8,14 +8,15 @@ import time
 import threading
 from typing import Any, Dict, List, Optional
 
-from src.core.interfaces import CookieProvider
 from src.core import config
-from src.core.config import HYPERAGENT_BASE_URL
+from src.core.config import HYPERAGENT_BASE_URL, SESSION_COOKIE_NAME
+from src.core.interfaces import CookieProvider
 from src.core.logging_config import get_logger
 
 logger = get_logger("session")
 
-COOKIE_NAME = "__Host-hyperagent_session"
+# Re-exported for callers that only import the provider.
+COOKIE_NAME = SESSION_COOKIE_NAME
 
 
 class StaticSessionCookieProvider(CookieProvider):

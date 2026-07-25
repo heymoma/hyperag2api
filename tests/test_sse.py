@@ -3,7 +3,7 @@
 import json
 import unittest
 
-from src.core.models import (
+from src.core.sse import (
     format_openai_chunk,
     format_openai_keepalive_chunk,
     sse_comment,
