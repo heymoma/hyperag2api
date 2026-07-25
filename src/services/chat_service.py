@@ -25,7 +25,7 @@ import httpx
 from src.core.interfaces import CookieProvider, ChatBackend, AuthError
 from src.core import config
 from src.core.config import MODEL_MAPPING, resolve_model
-from src.core.models import format_openai_chunk, sse_comment, build_usage, DONE
+from src.core.models import format_openai_chunk, format_openai_keepalive_chunk, sse_comment, build_usage, DONE
 from src.core.session_store import SessionStore
 from src.core.logging_config import get_logger
 from src.services import tool_bridge
@@ -377,6 +377,7 @@ class ChatService:
                         data = await asyncio.wait_for(aiter.__anext__(), timeout=keepalive)
                     except asyncio.TimeoutError:
                         yield sse_comment("keepalive")
+                        yield format_openai_keepalive_chunk(chat_id, model)
                         continue
                 else:
                     data = await aiter.__anext__()

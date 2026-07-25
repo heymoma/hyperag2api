@@ -54,15 +54,6 @@ class TestConfigFile(unittest.TestCase):
                     self.assertEqual(config.load_sessions(), ["fileTokA", "fileTokB"])
 
 
-class TestBalanceRotation(unittest.IsolatedAsyncioTestCase):
-    async def test_orders_by_remaining_balance(self):
-        async def bf(tok):
-            return {"a": 100.0, "b": 400.0, "c": 250.0}[tok]
-        p = StaticSessionCookieProvider(["a", "b", "c"], balance_fn=bf, rotate_by_balance=True, refresh_interval=0)
-        ck = await p.get_cookies()
-        self.assertEqual(ck["__Host-hyperagent_session"], "b")  # richest first
-
-
 class TestRotation(unittest.IsolatedAsyncioTestCase):
     async def test_create_thread_rotates_on_auth_error(self):
         from src.core.interfaces import AuthError
@@ -88,25 +79,6 @@ class TestRotation(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(used["__Host-hyperagent_session"], "accB")  # rotated account
 
 
-class TestBalance(unittest.IsolatedAsyncioTestCase):
-    async def test_get_balance_computes_remaining(self):
-        resp = MagicMock()
-        resp.status_code = 200
-        resp.json.return_value = {
-            "planName": "Pay As You Go", "bonusCreditInitialUsd": 500,
-            "bonusCreditUsedUsd": 167.56, "totalCostUsd": 167.56, "costLimitUsd": None,
-            "components": {"anthropic": 167.3},
-        }
-        client = AsyncMock()
-        client.get.return_value = resp
-        cm = MagicMock()
-        cm.__aenter__.return_value = client
-        with patch("src.services.accounts.httpx.AsyncClient", return_value=cm):
-            bal = await accounts.get_balance("tok")
-        self.assertEqual(bal["credit_initial_usd"], 500)
-        self.assertEqual(bal["credit_remaining_usd"], 332.44)
-
-
 class TestStaticProvider(unittest.IsolatedAsyncioTestCase):
     async def test_get_cookies_returns_active(self):
         p = StaticSessionCookieProvider(["tok1", "tok2"])
@@ -126,6 +98,17 @@ class TestStaticProvider(unittest.IsolatedAsyncioTestCase):
 
     def test_clear_is_noop(self):
         self.assertFalse(StaticSessionCookieProvider(["t"]).clear_cookies())
+
+    async def test_session_cooldown_skips_quarantined(self):
+        p = StaticSessionCookieProvider(["tok1", "tok2"])
+        p.mark_cooldown("tok1", duration_seconds=100)
+        self.assertEqual((await p.get_cookies())["__Host-hyperagent_session"], "tok2")
+
+    async def test_session_cooldown_all_quarantined_fallback(self):
+        p = StaticSessionCookieProvider(["tok1", "tok2"])
+        p.mark_cooldown("tok1", duration_seconds=100)
+        p.mark_cooldown("tok2", duration_seconds=100)
+        self.assertIn("tok", (await p.get_cookies())["__Host-hyperagent_session"])
 
 
 class TestAccountVerify(unittest.IsolatedAsyncioTestCase):

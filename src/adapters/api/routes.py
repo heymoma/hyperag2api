@@ -10,7 +10,6 @@ from src.core.config import PROXY_API_KEY, SESSION_HEADER
 from src.core.models import estimate_tokens
 from src.core.stats import STATS
 from src.adapters.api.schemas import ChatCompletionRequest
-from src.adapters.api.dashboard import DASHBOARD_HTML
 from src.adapters.session.config_provider import StaticSessionCookieProvider, COOKIE_NAME
 from src.adapters.backend.hyperagent_client import HyperagentClient
 from src.services.chat_service import ChatService
@@ -20,23 +19,12 @@ from src.core.logging_config import get_logger
 logger = get_logger("api")
 
 
-async def _balance_fn(token: str):
-    """Injected into the session provider for balance-based rotation."""
-    bal = await accounts.get_balance(token)
-    return bal.get("credit_remaining_usd")
-
-
 def _build_cookie_provider():
     """Build the browserless session provider from config."""
     sessions = config.load_sessions()
     if not sessions:
         logger.warning("No sessions configured — add them to config.yaml or set HYPERAGENT_SESSION.")
-    return StaticSessionCookieProvider(
-        sessions,
-        balance_fn=_balance_fn,
-        rotate_by_balance=config.ROTATE_BY_BALANCE,
-        refresh_interval=config.BALANCE_REFRESH_SECONDS,
-    )
+    return StaticSessionCookieProvider(sessions)
 
 
 # Initialize services
@@ -53,11 +41,9 @@ async def _verify_configured_sessions():
     if not sessions:
         logger.warning("No sessions configured — add 'sessions:' to config.yaml or set HYPERAGENT_SESSION.")
         return
-    for info in await accounts.summaries(sessions):
+    for info in await accounts.verify_all(sessions):
         if info.get("valid"):
-            bal = info.get("balance") or {}
-            logger.info("Session %s OK — %s <%s> — remaining $%s", info["session"],
-                        info.get("name"), info.get("email"), bal.get("credit_remaining_usd"))
+            logger.info("Session %s OK — %s <%s>", info["session"], info.get("name"), info.get("email"))
         else:
             logger.warning("Session %s INVALID (%s)", info.get("session"),
                            info.get("status") or info.get("error"))
@@ -110,7 +96,6 @@ async def root():
                 <div class="status"><span class="dot"></span>Proxy Online</div>
                 <h1>Hyperagent Local API Proxy</h1>
                 <p>OpenAI-compatible local server forwarding requests to Hyperagent.</p>
-                <p>Live Dashboard: <a href="/dashboard">/dashboard</a></p>
                 <p>Interactive API Docs: <a href="/docs">/docs</a></p>
                 <p>Models endpoint: <a href="/v1/models">/v1/models</a></p>
                 <p>Chat Completions: <code>/v1/chat/completions</code></p>
@@ -152,23 +137,6 @@ async def health():
         },
     )
 
-
-@app.get("/accounts")
-async def accounts_endpoint(dependencies=Depends(verify_api_key)):
-    """Verify configured session(s) and show account + remaining balance for each."""
-    sessions = config.load_sessions()
-    infos = await accounts.summaries(sessions)
-    total_remaining = sum(
-        (a.get("balance", {}) or {}).get("credit_remaining_usd") or 0
-        for a in infos if a.get("valid")
-    )
-    return {
-        "count": len(infos),
-        "accounts": infos,
-        "total_remaining_usd": round(total_remaining, 2),
-        "rotate_by_balance": config.ROTATE_BY_BALANCE,
-        "balance_note": accounts.BALANCE_NOTE,
-    }
 
 
 @app.get("/v1/models")
@@ -238,18 +206,3 @@ async def chat_completions(
     return response
 
 
-@app.get("/api/stats")
-async def api_stats():
-    """JSON stats consumed by the dashboard (and any external monitor)."""
-    return {
-        "summary": STATS.summary(),
-        "sessions": await chat_service.session_store.snapshot(),
-        "recent": STATS.recent(),
-        "server_time": time.time(),
-    }
-
-
-@app.get("/dashboard", response_class=HTMLResponse)
-async def dashboard():
-    """Live monitoring dashboard (polls /api/stats)."""
-    return DASHBOARD_HTML

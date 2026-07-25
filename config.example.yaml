@@ -16,16 +16,22 @@ host: 127.0.0.1
 port: 8000
 proxy_api_key: ""                    # if set, clients must send Authorization: Bearer <key>
 
-# --- Rotation ----------------------------------------------------------------
-rotate_by_balance: true              # prefer the account with the most remaining credit
-balance_refresh_seconds: 300         # how often to re-check balances
-
 # --- Behaviour ---------------------------------------------------------------
 low_latency_mode: true               # keep server-side tools/plan-mode off (fast + cheap)
 reasoning_style: reasoning_content   # reasoning_content | think_tags | both
 toolcall_mode: content               # content | openai | off
 enable_multimodal: true
 disable_server_mcp: true             # during client tool-calls, keep Hyperagent's own tools off
+
+# --- Anti-Detection ----------------------------------------------------------
+tls_impersonate: chrome124             # chrome124 | chrome120 | safari15_5 | edge101
+enable_tls_fingerprint: true          # spoof browser TLS ClientHello JA3/JA4 fingerprint
+enable_human_jitter: true             # randomized human timing delay before requests
+jitter_min_ms: 150
+jitter_max_ms: 600
+enable_ua_rotation: true              # rotate modern browser User-Agents + Sec-CH-UA
+enable_session_cooldown: true         # quarantine rate-limited/auth-failed sessions
+cooldown_seconds: 600                 # cooldown quarantine duration in seconds (10 mins)
 
 # --- Sessions/threads --------------------------------------------------------
 session_persist: true                # persist session->thread map (SQLite)

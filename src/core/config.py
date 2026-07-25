@@ -105,9 +105,6 @@ HYPERAGENT_AUTH_ME_API = f"{HYPERAGENT_BASE_URL}/api/auth/me"
 #   POST /api/uploads {filename, mimeType, sizeBytes} -> {fileId, uploadUrl}
 #   PUT <uploadUrl> (raw bytes to S3); then reference fileId in chat "attachmentIds".
 HYPERAGENT_UPLOADS_API = f"{HYPERAGENT_BASE_URL}/api/uploads"
-# Billing / balance (from captured web traffic).
-HYPERAGENT_BILLING_CONSUMPTION_API = f"{HYPERAGENT_BASE_URL}/api/settings/billing/consumption"
-HYPERAGENT_BILLING_STATUS_API = f"{HYPERAGENT_BASE_URL}/api/settings/billing/status"
 # Attachment upload (verified live): POST JSON {filename, mimeType, size, content(base64)}
 # -> {success, fileId, url, ...}. The thread-scoped attachments route takes
 # {files:[{name, size, mimeType, base64}]} and binds the file to the thread.
@@ -178,6 +175,18 @@ SEARCH_MODE = env_str("SEARCH_MODE", "exa")
 # and enable the specific ENABLE_* flags you want.
 LOW_LATENCY_MODE = env_flag("LOW_LATENCY_MODE", True)
 
+
+# --------------------------------------------------------------------------- #
+# Anti-Detection & Browser Impersonation                                       #
+# --------------------------------------------------------------------------- #
+TLS_IMPERSONATE = env_str("TLS_IMPERSONATE", "chrome124")
+ENABLE_TLS_FINGERPRINT = env_flag("ENABLE_TLS_FINGERPRINT", True)
+ENABLE_HUMAN_JITTER = env_flag("ENABLE_HUMAN_JITTER", True)
+JITTER_MIN_MS = env_float("JITTER_MIN_MS", 150.0)
+JITTER_MAX_MS = env_float("JITTER_MAX_MS", 600.0)
+ENABLE_UA_ROTATION = env_flag("ENABLE_UA_ROTATION", True)
+ENABLE_SESSION_COOLDOWN = env_flag("ENABLE_SESSION_COOLDOWN", True)
+COOLDOWN_SECONDS = env_float("COOLDOWN_SECONDS", 600.0)
 
 # --------------------------------------------------------------------------- #
 # Default network headers                                                      #
@@ -301,11 +310,6 @@ SESSION_SUFFIX_SEP = "@"
 # Sessions — config-provided token(s); rotation                                #
 # --------------------------------------------------------------------------- #
 SESSIONS_FILE = env_str("SESSIONS_FILE", "")
-# Pick/keep the account with the most remaining credit and rotate off exhausted
-# ones (in addition to rotating on 401/403).
-ROTATE_BY_BALANCE = env_flag("ROTATE_BY_BALANCE", True)
-# How often (seconds) to refresh per-session balances for balance rotation.
-BALANCE_REFRESH_SECONDS = env_int("BALANCE_REFRESH_SECONDS", 300)
 
 
 def load_sessions() -> List[str]:

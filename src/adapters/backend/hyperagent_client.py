@@ -15,6 +15,7 @@ from typing import Any, AsyncGenerator, Dict, List, Optional
 
 import httpx
 
+from src.core.anti_detection import get_async_session, apply_human_jitter, get_endpoint_headers
 from src.core.interfaces import ChatBackend, AuthError
 from src.core import config
 from src.core.config import (
@@ -70,6 +71,7 @@ class HyperagentClient(ChatBackend):
         session_id: Optional[str] = None,
     ) -> str:
         """Initialize a new chat thread on Hyperagent (with retries)."""
+        await apply_human_jitter()
         payload = {
             "modelId": model,
             "defaultSubagentModel": None,
@@ -80,8 +82,9 @@ class HyperagentClient(ChatBackend):
         last_error: Optional[str] = None
         for attempt in range(self.max_retries + 1):
             try:
-                async with httpx.AsyncClient(
-                    cookies=cookies, headers=self.headers, timeout=self._timeout(config.REQUEST_READ_TIMEOUT)
+                headers = get_endpoint_headers("new_thread", base_headers=self.headers)
+                async with get_async_session(
+                    cookies=cookies, headers=headers, timeout=self._timeout(config.REQUEST_READ_TIMEOUT)
                 ) as client:
                     response = await client.post(HYPERAGENT_THREADS_API, json=payload)
                     if response.status_code == 200:
@@ -110,8 +113,9 @@ class HyperagentClient(ChatBackend):
         warm_url = HYPERAGENT_WARM_API_TEMPLATE.format(thread_id=thread_id)
         for attempt in range(self.max_retries + 1):
             try:
-                async with httpx.AsyncClient(
-                    cookies=cookies, headers=self.headers, timeout=self._timeout(config.REQUEST_READ_TIMEOUT)
+                headers = get_endpoint_headers("warm", thread_id=thread_id, base_headers=self.headers)
+                async with get_async_session(
+                    cookies=cookies, headers=headers, timeout=self._timeout(config.REQUEST_READ_TIMEOUT)
                 ) as client:
                     response = await client.post(warm_url)
                     if response.status_code == 200:
@@ -142,9 +146,6 @@ class HyperagentClient(ChatBackend):
         payload.update(config.get_chat_feature_flags())
         if feature_flags:
             payload.update(feature_flags)
-        # Reference uploaded files via "attachmentIds" — the exact field the web
-        # app uses (verified from captured traffic). Each attachment carries the
-        # fileId returned by /api/uploads.
         if attachments:
             ids = [a.get("id") for a in attachments if a.get("id")]
             if ids:
@@ -161,11 +162,13 @@ class HyperagentClient(ChatBackend):
         feature_flags: Optional[Dict[str, Any]] = None,
     ) -> AsyncGenerator[Dict[str, Any], None]:
         """Send a message to the thread and stream response events."""
+        await apply_human_jitter()
         chat_url = HYPERAGENT_CHAT_API_TEMPLATE.format(thread_id=thread_id)
         chat_payload = self._build_chat_payload(prompt, session_id, attachments, feature_flags)
 
-        async with httpx.AsyncClient(
-            cookies=cookies, headers=self.headers, timeout=self._timeout(config.STREAM_READ_TIMEOUT)
+        headers = get_endpoint_headers("chat", thread_id=thread_id, base_headers=self.headers)
+        async with get_async_session(
+            cookies=cookies, headers=headers, timeout=self._timeout(config.STREAM_READ_TIMEOUT)
         ) as client:
             async with client.stream("POST", chat_url, json=chat_payload) as response:
                 if response.status_code != 200:
@@ -180,7 +183,6 @@ class HyperagentClient(ChatBackend):
                     if not line:
                         continue
                     stripped = line.strip()
-                    # Tolerate SSE comments / keepalives and non-data frames.
                     if stripped.startswith(":") or stripped.startswith("event:"):
                         continue
                     if not stripped.startswith("data:"):
@@ -193,7 +195,6 @@ class HyperagentClient(ChatBackend):
                     try:
                         yield json.loads(data_str)
                     except json.JSONDecodeError:
-                        # Ignore partial/non-JSON keepalive noise rather than crash.
                         logger.debug("Skipping non-JSON SSE frame: %s", data_str[:120])
                         continue
 
@@ -206,17 +207,12 @@ class HyperagentClient(ChatBackend):
         data: bytes,
         content_type: str,
     ) -> Optional[Dict[str, Any]]:
-        """Upload an attachment via the presigned-S3 flow (verified from web traffic).
-
-        1. POST /api/uploads {filename, mimeType, sizeBytes} -> {fileId, uploadUrl}
-        2. PUT the raw bytes to the presigned uploadUrl (S3).
-        The returned fileId is referenced in the chat payload as ``attachmentIds``.
-        Returns {id, name, mimeType, size} or None (caller proceeds text-only).
-        """
+        """Upload an attachment via the presigned-S3 flow (verified from web traffic)."""
         size = len(data)
         try:
-            async with httpx.AsyncClient(
-                cookies=cookies, headers=self.headers, timeout=self._timeout(config.REQUEST_READ_TIMEOUT)
+            headers = get_endpoint_headers("upload", thread_id=thread_id, base_headers=self.headers)
+            async with get_async_session(
+                cookies=cookies, headers=headers, timeout=self._timeout(config.REQUEST_READ_TIMEOUT)
             ) as client:
                 resp = await client.post(
                     HYPERAGENT_UPLOADS_API,
@@ -232,10 +228,7 @@ class HyperagentClient(ChatBackend):
                     logger.warning("Upload init returned no fileId/uploadUrl: %s", str(body)[:160])
                     return None
 
-            # PUT raw bytes to the presigned URL (no app cookies — it's S3-signed).
-            # The presign signs content-length;host;if-none-match, so we MUST send
-            # If-None-Match: * (verified) — httpx sets Content-Length/Host itself.
-            async with httpx.AsyncClient(timeout=self._timeout(config.REQUEST_READ_TIMEOUT)) as s3:
+            async with get_async_session(timeout=self._timeout(config.REQUEST_READ_TIMEOUT)) as s3:
                 put = await s3.put(upload_url, content=data, headers={"If-None-Match": "*"})
                 if put.status_code not in (200, 201, 204):
                     logger.warning("Presigned PUT failed (%s): %s", put.status_code, put.text[:120])
@@ -251,8 +244,9 @@ class HyperagentClient(ChatBackend):
         """Best-effort backend cancel (used on client disconnect)."""
         url = HYPERAGENT_INTERRUPT_API_TEMPLATE.format(thread_id=thread_id)
         try:
-            async with httpx.AsyncClient(
-                cookies=cookies, headers=self.headers, timeout=self._timeout(10.0)
+            headers = get_endpoint_headers("interrupt", thread_id=thread_id, base_headers=self.headers)
+            async with get_async_session(
+                cookies=cookies, headers=headers, timeout=self._timeout(10.0)
             ) as client:
                 await client.post(url)
         except Exception as exc:  # pragma: no cover - best-effort

@@ -25,6 +25,11 @@ def sse_comment(text: str = "") -> str:
 DONE = "data: [DONE]\n\n"
 
 
+def format_openai_keepalive_chunk(id_str: str, model: str) -> str:
+    """Format an empty OpenAI delta SSE chunk as a keepalive for strict clients."""
+    return format_openai_chunk(id_str, model, content="")
+
+
 def format_openai_chunk(
     id_str: str,
     model: str,
