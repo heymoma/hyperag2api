@@ -83,6 +83,8 @@ cooldown_seconds: 600
 | `/v1/chat/completions` | Чат-эндпоинт OpenAI (Стриминг и обычные ответы). |
 | `/v1/models` | Список поддерживаемых моделей. |
 | `/health` | Проверка состояния сессий и сервера. |
+| `/` | Живая панель мониторинга (сессии, стримы, последние запросы). |
+| `/api/live-status` | JSON-фид, на котором работает панель. |
 
 ---
 
@@ -122,11 +124,48 @@ cooldown_seconds: 600
 | **DeepSeek** | `hyperag2api/deepseek-v4-pro` | DeepSeek V4 Pro |
 | **xAI** | `hyperag2api/grok-4.5` | Grok 4.5 |
 
+## 🗂️ Структура проекта
+
+Код разделён на слои, зависимости направлены только внутрь:
+`adapters` → `services` → `core`, транспорт предоставляет `infra`.
+
+```
+src/
+├── core/                    # Фундамент без зависимостей от фреймворка
+│   ├── config.py            #   Настройки: defaults < config.yaml < env
+│   ├── schemas.py           #   Модели запроса/ответа OpenAI
+│   ├── interfaces.py        #   Порты CookieProvider / ChatBackend
+│   ├── sse.py               #   Формирование SSE-чанков и оценка токенов
+│   ├── session_store.py     #   Ключ диалога → id треда (LRU + SQLite)
+│   └── stats.py             #   Счётчики рантайма в памяти
+├── infra/                   # Как байты доходят до hyperagent.com
+│   ├── fingerprint.py       #   Заголовки браузера, Client Hints, джиттер
+│   └── http_client.py       #   Транспорт curl_cffi (TLS) / httpx
+├── services/                # Бизнес-логика
+│   ├── chat_service.py      #   Оркестрация одного запроса целиком
+│   ├── conversation.py      #   Промпты и ключи сессий
+│   ├── threads.py           #   Создание тредов с ротацией аккаунтов
+│   ├── attachments.py       #   Загрузка изображений (мультимодальность)
+│   ├── streaming.py         #   Чтение бэкенда с keepalive
+│   ├── stream_events.py     #   Классификация SSE-кадров бэкенда
+│   ├── render.py            #   Кадры → delta-чанки OpenAI
+│   ├── tool_bridge.py       #   Промпт-контракт для tool-calling
+│   ├── tool_mode.py         #   Один ход клиентского tool-calling
+│   └── accounts.py          #   Проверка сессий (с кэшем)
+├── adapters/                # Внешний мир
+│   ├── api/                 #   FastAPI-приложение, роутеры, DI, дашборд
+│   ├── backend/             #   HTTP-клиент Hyperagent
+│   └── session/             #   Токены сессий из конфига
+└── server.py                # Точка входа (start.py делегирует сюда)
+```
+
+---
+
 ## 🧪 Тестирование
 
 Запуск юнит-тестов:
 ```bash
-python3 -m unittest discover -s tests -p "test_*.py"
+python3 -m pytest tests
 ```
 
 ---

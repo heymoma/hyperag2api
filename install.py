@@ -43,6 +43,13 @@ def verify() -> bool:
         except Exception as exc:  # pragma: no cover - defensive
             print(f"\033[91m  ✗ import {mod}: {exc}\033[0m")
             ok = False
+
+    # Optional: TLS impersonation. Its absence is a downgrade, not a failure.
+    try:
+        __import__("curl_cffi")
+        print("  ✓ import curl_cffi (TLS impersonation enabled)")
+    except Exception:
+        print("\033[93m  ⚠ curl_cffi missing — falling back to plain httpx\033[0m")
     return ok
 
 

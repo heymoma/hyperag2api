@@ -15,18 +15,18 @@ from typing import Any, AsyncGenerator, Dict, List, Optional
 
 import httpx
 
-from src.core.anti_detection import get_async_session, apply_human_jitter, get_endpoint_headers
-from src.core.interfaces import ChatBackend, AuthError
 from src.core import config
 from src.core.config import (
-    HYPERAGENT_THREADS_API,
-    HYPERAGENT_WARM_API_TEMPLATE,
+    DEFAULT_HEADERS,
     HYPERAGENT_CHAT_API_TEMPLATE,
     HYPERAGENT_INTERRUPT_API_TEMPLATE,
+    HYPERAGENT_THREADS_API,
     HYPERAGENT_UPLOADS_API,
-    DEFAULT_HEADERS,
+    HYPERAGENT_WARM_API_TEMPLATE,
 )
+from src.core.interfaces import AuthError, ChatBackend
 from src.core.logging_config import get_logger
+from src.infra import apply_human_jitter, get_async_session, get_endpoint_headers
 
 logger = get_logger("backend")
 

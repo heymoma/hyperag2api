@@ -1,8 +1,12 @@
-"""SSE formatting helpers for OpenAI-compatible streaming output.
+"""OpenAI-compatible SSE wire format helpers.
 
-The request/response Pydantic models live in ``src.adapters.api.schemas``; this
-module holds only the wire-formatting helpers so they can be reused without
-pulling in FastAPI/pydantic request types.
+Everything the proxy writes back to the client goes through this module: the
+``chat.completion.chunk`` frames, the keepalive comment, the terminal ``[DONE]``
+marker and the rough token accounting behind the ``usage`` block.
+
+Deliberately free of FastAPI/pydantic imports so it can be reused and unit-tested
+without pulling in the web layer. The request/response models live in
+``src.core.schemas``.
 """
 
 from __future__ import annotations
@@ -11,7 +15,12 @@ import json
 import time
 from typing import Any, Dict, List, Optional
 
+DONE = "data: [DONE]\n\n"
 
+
+# --------------------------------------------------------------------------- #
+# Frame builders                                                               #
+# --------------------------------------------------------------------------- #
 def sse(payload: Dict[str, Any]) -> str:
     """Serialize a dict as one SSE ``data:`` event."""
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
@@ -20,14 +29,6 @@ def sse(payload: Dict[str, Any]) -> str:
 def sse_comment(text: str = "") -> str:
     """An SSE comment line — used as a keepalive; ignored by OpenAI clients."""
     return f": {text}\n\n"
-
-
-DONE = "data: [DONE]\n\n"
-
-
-def format_openai_keepalive_chunk(id_str: str, model: str) -> str:
-    """Format an empty OpenAI delta SSE chunk as a keepalive for strict clients."""
-    return format_openai_chunk(id_str, model, content="")
 
 
 def format_openai_chunk(
@@ -62,6 +63,14 @@ def format_openai_chunk(
     return sse(chunk)
 
 
+def format_openai_keepalive_chunk(id_str: str, model: str) -> str:
+    """An empty delta chunk — a keepalive for clients that ignore SSE comments."""
+    return format_openai_chunk(id_str, model, content="")
+
+
+# --------------------------------------------------------------------------- #
+# Usage accounting                                                             #
+# --------------------------------------------------------------------------- #
 def estimate_tokens(text: str) -> int:
     """Rough token estimate (~4 chars/token) for usage accounting."""
     if not text:

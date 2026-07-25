@@ -22,7 +22,7 @@ import hashlib
 import json
 import re
 import uuid
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 TOOL_CALL_SENTINEL = "<tool_call>"
 
@@ -48,15 +48,6 @@ def sentinel_holdback(pending: str, sentinel: str = TOOL_CALL_SENTINEL) -> int:
         if pending.endswith(sentinel[:k]):
             return k
     return 0
-
-
-def build_tool_reminder() -> str:
-    """One-line contract reminder for threads that already saw the full preamble."""
-    return (
-        "(Client tools available — to call one, output "
-        '<tool_call>{"name":"<fn>","arguments":{...}}</tool_call> and nothing else; '
-        "the client runs it and returns the result next turn.)"
-    )
 
 
 def _tool_defs(tools: List[Any]) -> List[Dict[str, Any]]:
@@ -160,11 +151,6 @@ def parse_tool_calls(text: str) -> List[Dict[str, Any]]:
     return calls
 
 
-def strip_tool_blocks(text: str) -> str:
-    """Remove any tool_call blocks, leaving prose (used as a fallback)."""
-    return FENCED_RE.sub("", TOOL_CALL_RE.sub("", text or "")).strip()
-
-
 def format_tool_results(tail: List[Any]) -> str:
     """Turn a tail of assistant(tool_calls)+tool messages into a text block.
 
@@ -201,18 +187,9 @@ def format_tool_results(tail: List[Any]) -> str:
     )
 
 
-def split_new_messages(tail: List[Any]) -> Tuple[List[Any], List[Any], List[Any]]:
-    """Split a tail into (user_msgs, tool_msgs, assistant_msgs)."""
-    users, tools_, assistants = [], [], []
-    for m in tail:
-        r = _role(m)
-        if r == "user":
-            users.append(m)
-        elif r == "tool":
-            tools_.append(m)
-        elif r == "assistant":
-            assistants.append(m)
-    return users, tools_, assistants
+def user_messages(tail: List[Any]) -> List[Any]:
+    """The genuinely new user turns in a tail (tool results are not user input)."""
+    return [m for m in tail if _role(m) == "user"]
 
 
 # --- small accessors tolerant of pydantic Message or dict ----------------- #
