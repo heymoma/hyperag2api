@@ -118,7 +118,7 @@ class ChatService:
         combined_prompt = ""
         for msg in messages:
             role, content = self._msg_role_content(msg)
-            if role == "system":
+            if role in ("system", "developer"):
                 system_prompt += f"{content}\n"
             else:
                 combined_prompt += f"{role.capitalize()}: {content}\n\n"
@@ -131,7 +131,7 @@ class ChatService:
         pairs = []
         for msg in messages:
             role, content = self._msg_role_content(msg)
-            if role != "system":
+            if role not in ("system", "developer"):
                 pairs.append((role, content))
         return pairs
 
