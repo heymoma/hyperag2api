@@ -12,8 +12,8 @@ class TestAPIRoutes(unittest.TestCase):
     def test_root_endpoint(self):
         response = client.get("/")
         self.assertEqual(response.status_code, 200)
-        self.assertIn("Hyperagent Local API Proxy", response.text)
-        self.assertIn("Proxy Online", response.text)
+        self.assertIn("hyperag2api Proxy", response.text)
+        self.assertIn("LIVE", response.text)
 
     @patch("src.adapters.api.routes.PROXY_API_KEY", "")
     def test_list_models_no_key(self):

@@ -6,7 +6,7 @@ tokens it rotates on auth failures (:meth:`invalidate`) to advance to the next s
 
 import time
 import threading
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from src.core.interfaces import CookieProvider
 from src.core import config
@@ -56,6 +56,23 @@ class StaticSessionCookieProvider(CookieProvider):
 
     def count(self) -> int:
         return len(self._sessions)
+
+    def list_status(self) -> List[Dict[str, Any]]:
+        """Return status list of all sessions for live monitoring."""
+        with self._lock:
+            now = time.time()
+            res = []
+            for idx, tok in enumerate(self._sessions):
+                cd = self._cooldowns.get(tok, 0.0)
+                is_cd = cd > now
+                res.append({
+                    "index": idx + 1,
+                    "token": "…" + tok[-4:] if len(tok) > 4 else "…",
+                    "status": "quarantine" if is_cd else "active",
+                    "cooldown_remaining": round(cd - now) if is_cd else 0,
+                    "is_current": (idx == self._get_healthy_idx())
+                })
+            return res
 
     def mark_cooldown(self, token: Optional[str] = None, duration_seconds: Optional[float] = None) -> None:
         """Put a session token into cooldown (circuit breaker for 429/401/403 errors)."""
